@@ -68,6 +68,7 @@ class DocumentOutput:
     created_at: datetime
     updated_at: datetime
     source_errors: list[SourceErrorOutput] = field(default_factory=list)
+    error_stage: str | None = None
 
 
 DocumentProgressCallback = Callable[[DocumentOutput], Awaitable[None]]
@@ -83,6 +84,7 @@ def document_to_output(document: Document) -> DocumentOutput:
         user_id=document.user_id,
         presentation=document.presentation,
         error_message=document.error_message,
+        error_stage=document.error_stage,
         source_ids=[source.id for source in document.raw_sources],
         source_errors=build_source_errors(document.raw_sources),
         created_at=document.created_at,

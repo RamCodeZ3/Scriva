@@ -56,7 +56,8 @@ after the `done` event, by the generated DOCX part. Creation reports
 
 Failed sources appear in `sources_errors` without stopping processing when at
 least one source succeeded. A fatal error ends the stream with `status` set to
-`failed` and its cause in `error_message`; no DOCX part follows that event.
+`failed`, its cause in `error_message`, and the failing pipeline stage in
+`error_stage`; no DOCX part follows that event.
 
 ## Status
 

@@ -49,6 +49,7 @@ class Document:
     created_at: datetime
     updated_at: datetime
     error_message: str | None = None
+    error_stage: str | None = None
     additional_notes: str | None = None
     document_styles: dict[str, Any] = field(
         default_factory=lambda: dict(APA7_DOCUMENT_STYLES)
@@ -173,6 +174,7 @@ class Document:
         )
         self.status = DocumentStatus.DONE
         self.error_message = None
+        self.error_stage = None
         self._touch()
 
     def start_augmentation(self, new_raw_sources: list[Source]) -> None:
@@ -180,11 +182,13 @@ class Document:
         self.raw_sources.extend(new_raw_sources)
         self.status = DocumentStatus.EXTRACTING
         self.error_message = None
+        self.error_stage = None
         self._touch()
 
-    def fail(self, reason: str) -> None:
+    def fail(self, reason: str, stage: str | None = None) -> None:
         self.status = DocumentStatus.FAILED
         self.error_message = reason
+        self.error_stage = stage
         self._touch()
 
     def is_ready(self) -> bool:

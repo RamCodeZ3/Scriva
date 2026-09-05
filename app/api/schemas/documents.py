@@ -26,6 +26,7 @@ class DocumentMetadataResponse(BaseModel):
     status: str
     user_id: str | None = None
     error_message: str | None = None
+    error_stage: str | None = None
     sources_errors: list[SourceError] | None = None
     source_ids: list[str] | None = None
     created_at: str | None = None

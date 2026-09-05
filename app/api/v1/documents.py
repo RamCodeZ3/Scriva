@@ -315,6 +315,7 @@ def _metadata_out(document: DocumentOutput) -> DocumentMetadataResponse:
         status=document.status.value,
         user_id=str(document.user_id),
         error_message=document.error_message,
+        error_stage=document.error_stage,
         sources_errors=[
             {"source_id": str(item.source_id), "error": item.error}
             for item in document.source_errors
@@ -381,6 +382,7 @@ def _progressive_document_response(
                         failed = DocumentMetadataResponse(
                             status="failed",
                             error_message=str(item),
+                            error_stage="internal",
                         )
                         yield _json_part(boundary, failed)
                     break

@@ -68,6 +68,7 @@ class ProgressiveDocumentStreamTests(unittest.IsolatedAsyncioTestCase):
             ["extracting", "failed"],
         )
         self.assertEqual(json_parts[-1]["error_message"], "Writer unavailable")
+        self.assertEqual(json_parts[-1]["error_stage"], "internal")
         self.assertNotIn(b"Content-Disposition: attachment", body)
 
 

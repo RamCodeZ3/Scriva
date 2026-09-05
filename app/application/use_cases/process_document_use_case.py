@@ -51,6 +51,7 @@ class ProcessDocumentUseCase:
                 )
             sources.append(source)
 
+        error_stage = "source_extraction"
         try:
             document.start_extraction()
             await self._documents.save(document)
@@ -72,6 +73,7 @@ class ProcessDocumentUseCase:
             await self._documents.save(document)
             await self._report(document, on_progress)
 
+            error_stage = "ai_generation"
             title, sections, references = await self._writer.write(
                 source_content=combined_content,
                 title=document.title,
@@ -79,6 +81,7 @@ class ProcessDocumentUseCase:
                 presentation=document.presentation,
                 additional_notes=document.additional_notes,
             )
+            error_stage = "document_drafting"
             document.start_drafting()
             await self._documents.save(document)
             await self._report(document, on_progress)
@@ -88,7 +91,7 @@ class ProcessDocumentUseCase:
             await self._documents.save(document)
 
         except Exception as exc:
-            document.fail(str(exc))
+            document.fail(str(exc), error_stage)
             await self._documents.save(document)
             await self._report(document, on_progress)
             raise

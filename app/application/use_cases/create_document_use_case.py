@@ -91,7 +91,7 @@ class CreateDocumentUseCase:
             if on_progress is not None:
                 await on_progress(metadata)
         except Exception as exc:
-            final_document.fail(str(exc))
+            final_document.fail(str(exc), "document_export")
             await self._documents.save(final_document)
             if on_progress is not None:
                 await on_progress(document_to_output(final_document))

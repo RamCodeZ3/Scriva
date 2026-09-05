@@ -67,6 +67,7 @@ class AugmentDocumentUseCase:
         new_sources = [
             Source.create_auto(raw, data.user_id) for raw in data.sources
         ]
+        error_stage = "source_extraction"
         try:
             for source in new_sources:
                 await self._sources.save(source)
@@ -89,6 +90,7 @@ class AugmentDocumentUseCase:
                 f"[Fuente nueva {i + 1}]\n{s.get_content()}"
                 for i, s in enumerate(extracted_sources)
             )
+            error_stage = "ai_expansion"
             title, sections, references = await self._writer.augment(
                 existing_sections=document.sections,
                 existing_references=document.sources,
@@ -97,6 +99,7 @@ class AugmentDocumentUseCase:
                 additional_notes=data.additional_notes,
             )
 
+            error_stage = "document_drafting"
             original_cover = document.get_section(APASectionType.PRESENTATION)
             if original_cover is not None:
                 sections = [original_cover] + [
@@ -116,7 +119,7 @@ class AugmentDocumentUseCase:
             )
             await self._documents.save(document)
         except Exception as exc:
-            document.fail(str(exc))
+            document.fail(str(exc), error_stage)
             await self._documents.save(document)
             await self._report(document, on_progress)
             raise
@@ -136,7 +139,7 @@ class AugmentDocumentUseCase:
             )
             await self._report(document, on_progress)
         except Exception as exc:
-            document.fail(str(exc))
+            document.fail(str(exc), "document_export")
             await self._documents.save(document)
             await self._report(document, on_progress)
             raise
