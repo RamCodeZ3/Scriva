@@ -35,6 +35,11 @@ Turn raw, unstructured source material into a fully structured, properly cited d
 - **DiskCache** — Stores compiled DOCX binaries on local disk with content-addressed keys and LRU eviction.
 - **reportlab** — Generates PDF output for the final documents.
 - **youtube-transcript-api** — Retrieves transcripts from YouTube videos as a source input.
+- **OpenAI Whisper** — Transcribes local audio and video files supported by FFmpeg.
+
+Whisper uses the multilingual `base` model by default. Set `WHISPER_MODEL` to
+another installed model name or `WHISPER_DEVICE` to `cpu` or `cuda` when an
+explicit runtime device is required. FFmpeg must be available on `PATH`.
 
 ## Supported Output Formats
 

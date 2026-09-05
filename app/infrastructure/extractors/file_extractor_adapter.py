@@ -3,14 +3,20 @@ from __future__ import annotations
 import asyncio
 import os
 
+from application.ports.source_extractor_port import SourceExtractorPort
 from domain.exceptions import InvalidSourceError
 
-from application.ports.source_extractor_port import SourceExtractorPort
+_DOCUMENT_EXTENSIONS = {".txt", ".pdf", ".docx", ".doc", ".odt", ".rtf"}
 
 
 class FileExtractorAdapter(SourceExtractorPort):
-    def __init__(self, max_chars: int | None = 200_000) -> None:
+    def __init__(
+        self,
+        max_chars: int | None = 200_000,
+        media_extractor: SourceExtractorPort | None = None,
+    ) -> None:
         self._max_chars = max_chars
+        self._media_extractor = media_extractor
 
     async def extract(self, raw: str) -> str:
         if not os.path.isfile(raw):
@@ -18,14 +24,21 @@ class FileExtractorAdapter(SourceExtractorPort):
 
         ext = os.path.splitext(raw)[1].lower()
 
-        try:
-            content = await asyncio.to_thread(self._read_sync, raw, ext)
-        except InvalidSourceError:
-            raise
-        except Exception as exc:
-            raise InvalidSourceError(
-                f"Could not read file '{raw}': {exc}"
-            ) from exc
+        if ext not in _DOCUMENT_EXTENSIONS:
+            if self._media_extractor is None:
+                raise InvalidSourceError(
+                    f"Unsupported file extension: '{ext}'."
+                )
+            content = await self._media_extractor.extract(raw)
+        else:
+            try:
+                content = await asyncio.to_thread(self._read_sync, raw, ext)
+            except InvalidSourceError:
+                raise
+            except Exception as exc:
+                raise InvalidSourceError(
+                    f"Could not read file '{raw}': {exc}"
+                ) from exc
 
         content = content.strip()
         if not content:
@@ -47,7 +60,7 @@ class FileExtractorAdapter(SourceExtractorPort):
 
     @staticmethod
     def _read_txt(path: str) -> str:
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        with open(path, encoding="utf-8", errors="ignore") as f:
             return f.read()
 
     @staticmethod
