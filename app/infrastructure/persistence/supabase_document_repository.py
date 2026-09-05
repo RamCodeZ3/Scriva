@@ -7,8 +7,10 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
-from supabase import Client
-
+from application.dtos.document_dtos import DocumentReference
+from application.dtos.export_result import ExportResult
+from application.ports.document_repository_port import DocumentRepositoryPort
+from application.ports.source_repository_port import SourceRepositoryPort
 from domain.entities.document import Document, DocumentStatus
 from domain.value_objects.apa_structure import (
     APA7_DOCUMENT_STYLES,
@@ -19,11 +21,7 @@ from domain.value_objects.document_node import DocumentNode
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
-
-from application.dtos.export_result import ExportResult
-from application.dtos.document_dtos import DocumentReference
-from application.ports.document_repository_port import DocumentRepositoryPort
-from application.ports.source_repository_port import SourceRepositoryPort
+from supabase import Client
 
 
 class SupabaseDocumentRepository(DocumentRepositoryPort):
@@ -121,6 +119,7 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             "created_at": document.created_at.isoformat(),
             "updated_at": document.updated_at.isoformat(),
             "error_message": document.error_message,
+            "error_stage": document.error_stage,
             "additional_notes": document.additional_notes,
         }
 
@@ -130,7 +129,8 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             source = await self._sources.get_by_id(UUID(sid))
             if source is None:
                 raise ValueError(
-                    f"Document '{row['id']}' references a missing source '{sid}'."
+                    f"Document '{row['id']}' references a missing source "
+                    f"'{sid}'."
                 )
             raw_sources.append(source)
 
@@ -149,6 +149,7 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             error_message=row.get("error_message"),
+            error_stage=row.get("error_stage"),
             additional_notes=row.get("additional_notes"),
         )
 

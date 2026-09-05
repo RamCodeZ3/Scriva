@@ -1,20 +1,21 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
-from uuid import UUID, uuid4
 from enum import Enum
 from typing import Any
+from uuid import UUID, uuid4
 
 from domain.entities.source import Source
-from domain.value_objects.document_type import DocumentType
+from domain.exceptions import DocumentBuildError
 from domain.value_objects.apa_structure import (
     APA7_DOCUMENT_STYLES,
     APASection,
     APASectionType,
 )
-from domain.value_objects.source_ref import SourceReference
+from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
-from domain.exceptions import DocumentBuildError
+from domain.value_objects.source_ref import SourceReference
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,8 @@ class DocumentStatus(Enum):
     PENDING = "pending"
     EXTRACTING = "extracting"
     GENERATING = "generating"
+    EXPANDING = "expanding"
+    DRAFTING = "drafting"
     DONE = "done"
     FAILED = "failed"
 
@@ -46,6 +49,7 @@ class Document:
     created_at: datetime
     updated_at: datetime
     error_message: str | None = None
+    error_stage: str | None = None
     additional_notes: str | None = None
     document_styles: dict[str, Any] = field(
         default_factory=lambda: dict(APA7_DOCUMENT_STYLES)
@@ -90,6 +94,24 @@ class Document:
         self.status = DocumentStatus.GENERATING
         self._touch()
 
+    def start_expansion(self) -> None:
+        self._assert_status(DocumentStatus.EXTRACTING)
+        self.status = DocumentStatus.EXPANDING
+        self._touch()
+
+    def start_drafting(self) -> None:
+        if self.status not in {
+            DocumentStatus.GENERATING,
+            DocumentStatus.EXPANDING,
+        }:
+            raise DocumentBuildError(
+                "Invalid operation: document is "
+                f"'{self.status.value}', expected 'generating' or "
+                "'expanding'."
+            )
+        self.status = DocumentStatus.DRAFTING
+        self._touch()
+
     def complete(
         self,
         title: str,
@@ -97,7 +119,7 @@ class Document:
         sources: list[SourceReference],
         document_styles: dict[str, Any] | None = None,
     ) -> None:
-        self._assert_status(DocumentStatus.GENERATING)
+        self._assert_status(DocumentStatus.DRAFTING)
         self._validate_sections(sections)
 
         self.title = title
@@ -134,21 +156,39 @@ class Document:
         sources: list[SourceReference],
         new_raw_sources: list[Source],
     ) -> None:
-        if self.status != DocumentStatus.DONE:
+        if self.status != DocumentStatus.DRAFTING:
             raise DocumentBuildError(
-                f"Cannot add info to a document in '{self.status.value}' status; "
-                "it must be 'done'."
+                "Cannot add info to a document in "
+                f"'{self.status.value}' status; "
+                "it must be 'drafting'."
             )
         self._validate_sections(sections)
         self.title = title
         self.sections = sorted(sections, key=lambda s: s.section_type.order)
         self.sources = sources
-        self.raw_sources = self.raw_sources + new_raw_sources
+        existing_ids = {source.id for source in self.raw_sources}
+        self.raw_sources.extend(
+            source
+            for source in new_raw_sources
+            if source.id not in existing_ids
+        )
+        self.status = DocumentStatus.DONE
+        self.error_message = None
+        self.error_stage = None
         self._touch()
 
-    def fail(self, reason: str) -> None:
+    def start_augmentation(self, new_raw_sources: list[Source]) -> None:
+        self._assert_status(DocumentStatus.DONE)
+        self.raw_sources.extend(new_raw_sources)
+        self.status = DocumentStatus.EXTRACTING
+        self.error_message = None
+        self.error_stage = None
+        self._touch()
+
+    def fail(self, reason: str, stage: str | None = None) -> None:
         self.status = DocumentStatus.FAILED
         self.error_message = reason
+        self.error_stage = stage
         self._touch()
 
     def is_ready(self) -> bool:
@@ -195,7 +235,8 @@ class Document:
     def _assert_status(self, expected: DocumentStatus) -> None:
         if self.status != expected:
             raise DocumentBuildError(
-                f"Invalid operation: document is '{self.status.value}', expected '{expected.value}'."
+                f"Invalid operation: document is '{self.status.value}', "
+                f"expected '{expected.value}'."
             )
 
     def _touch(self) -> None:

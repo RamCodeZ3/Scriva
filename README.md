@@ -45,6 +45,20 @@ Turn raw, unstructured source material into a fully structured, properly cited d
 - Study guide
 - Quiz / Exam
 
+## Progressive Document Responses
+
+`POST /api/v1/documents/` and
+`PATCH /api/v1/documents/ai/{document_id}` return `multipart/mixed` streams.
+Each stream contains progressive `application/json` metadata parts followed,
+after the `done` event, by the generated DOCX part. Creation reports
+`extracting`, `generating`, `drafting`, and `done`; AI augmentation reports
+`extracting`, `expanding`, `drafting`, and `done`.
+
+Failed sources appear in `sources_errors` without stopping processing when at
+least one source succeeded. A fatal error ends the stream with `status` set to
+`failed`, its cause in `error_message`, and the failing pipeline stage in
+`error_stage`; no DOCX part follows that event.
+
 ## Status
 
 This project is under active development. issues, and feedback are welcome.

@@ -1,5 +1,12 @@
 from uuid import UUID
 
+from domain.entities.document import Document
+from domain.entities.source import Source
+
+from application.dtos.document_dtos import (
+    DocumentProgressCallback,
+    document_to_output,
+)
 from application.exceptions import (
     DocumentNotFoundError,
     NoSourcesExtractedError,
@@ -9,8 +16,6 @@ from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
 from application.ports.source_repository_port import SourceRepositoryPort
-
-from domain.entities.source import Source
 
 
 class ProcessDocumentUseCase:
@@ -26,7 +31,11 @@ class ProcessDocumentUseCase:
         self._extractor_factory = extractor_factory
         self._writer = document_writer
 
-    async def execute(self, document_id: UUID) -> None:
+    async def execute(
+        self,
+        document_id: UUID,
+        on_progress: DocumentProgressCallback | None = None,
+    ) -> None:
         document = await self._documents.get_by_id(document_id)
         if document is None:
             raise DocumentNotFoundError(
@@ -42,9 +51,11 @@ class ProcessDocumentUseCase:
                 )
             sources.append(source)
 
+        error_stage = "source_extraction"
         try:
             document.start_extraction()
             await self._documents.save(document)
+            await self._report(document, on_progress)
 
             extracted_sources = await self._extract_sources(sources)
 
@@ -60,7 +71,9 @@ class ProcessDocumentUseCase:
 
             document.start_generation()
             await self._documents.save(document)
+            await self._report(document, on_progress)
 
+            error_stage = "ai_generation"
             title, sections, references = await self._writer.write(
                 source_content=combined_content,
                 title=document.title,
@@ -68,15 +81,28 @@ class ProcessDocumentUseCase:
                 presentation=document.presentation,
                 additional_notes=document.additional_notes,
             )
+            error_stage = "document_drafting"
+            document.start_drafting()
+            await self._documents.save(document)
+            await self._report(document, on_progress)
             document.complete(
                 title=title, sections=sections, sources=references
             )
             await self._documents.save(document)
 
         except Exception as exc:
-            document.fail(str(exc))
+            document.fail(str(exc), error_stage)
             await self._documents.save(document)
+            await self._report(document, on_progress)
             raise
+
+    @staticmethod
+    async def _report(
+        document: Document,
+        on_progress: DocumentProgressCallback | None,
+    ) -> None:
+        if on_progress is not None:
+            await on_progress(document_to_output(document))
 
     async def _extract_sources(self, sources: list[Source]) -> list[Source]:
         extracted: list[Source] = []
