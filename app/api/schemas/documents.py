@@ -14,16 +14,22 @@ class CreateDocumentRequest(BaseModel):
     additional_notes: str | None = None
 
 
+class SourceError(BaseModel):
+    source_id: str
+    error: str
+
+
 class DocumentMetadataResponse(BaseModel):
-    id: str
-    title: str
-    document_type: str
+    id: str | None = None
+    title: str | None = None
+    document_type: str | None = None
     status: str
-    user_id: str
+    user_id: str | None = None
     error_message: str | None = None
-    source_ids: list[str]
-    created_at: str
-    updated_at: str
+    sources_errors: list[SourceError] | None = None
+    source_ids: list[str] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class DocumentPatchResponse(BaseModel):
