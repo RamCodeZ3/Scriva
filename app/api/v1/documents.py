@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+from collections.abc import AsyncIterator, Awaitable, Callable
 from io import BytesIO
 from urllib.parse import quote
 from uuid import UUID
@@ -9,6 +11,8 @@ from uuid import UUID
 from application.dtos.document_dtos import (
     AugmentDocumentInput,
     CreateDocumentInput,
+    DocumentFileOutput,
+    DocumentOutput,
     ExportDocumentInput,
     UpdateDocumentInput,
 )
@@ -78,15 +82,9 @@ DOCX_MEDIA_TYPE = (
     responses={
         200: {
             "description": (
-                "Generated DOCX; metadata is in X-Document-Metadata."
+                "Progressive JSON metadata followed by the generated DOCX."
             ),
-            "content": {DOCX_MEDIA_TYPE: {}},
-            "headers": {
-                "X-Document-Metadata": {
-                    "schema": {"type": "string"},
-                    "description": "JSON matching DocumentMetadataResponse.",
-                }
-            },
+            "content": {"multipart/mixed": {}},
         }
     },
 )
@@ -120,9 +118,9 @@ async def create_document(
         additional_notes=body.additional_notes,
     )
 
-    result = await use_case.execute(data)
-
-    return _docx_response(result)
+    return _progressive_document_response(
+        lambda on_progress: use_case.execute(data, on_progress)
+    )
 
 
 @router.post(
@@ -193,14 +191,10 @@ async def get_document(
     response_class=StreamingResponse,
     responses={
         200: {
-            "description": "Updated DOCX; metadata is in X-Document-Metadata.",
-            "content": {DOCX_MEDIA_TYPE: {}},
-            "headers": {
-                "X-Document-Metadata": {
-                    "schema": {"type": "string"},
-                    "description": "JSON matching DocumentMetadataResponse.",
-                }
-            },
+            "description": (
+                "Progressive JSON metadata followed by the updated DOCX."
+            ),
+            "content": {"multipart/mixed": {}},
         }
     },
 )
@@ -216,9 +210,9 @@ async def augment_document(
         sources=body.sources,
         additional_notes=body.additional_notes,
     )
-    result = await use_case.execute(data)
-
-    return _docx_response(result)
+    return _progressive_document_response(
+        lambda on_progress: use_case.execute(data, on_progress)
+    )
 
 
 @router.patch("/{document_id}", response_model=DocumentPatchResponse)
@@ -313,8 +307,7 @@ def _title_snippet(body: CreateDocumentRequest) -> str:
     return first.splitlines()[0][:80]
 
 
-def _metadata_out(result) -> DocumentMetadataResponse:
-    document = result.document
+def _metadata_out(document: DocumentOutput) -> DocumentMetadataResponse:
     return DocumentMetadataResponse(
         id=str(document.id),
         title=document.title,
@@ -322,6 +315,11 @@ def _metadata_out(result) -> DocumentMetadataResponse:
         status=document.status.value,
         user_id=str(document.user_id),
         error_message=document.error_message,
+        sources_errors=[
+            {"source_id": str(item.source_id), "error": item.error}
+            for item in document.source_errors
+        ]
+        or None,
         source_ids=[str(source_id) for source_id in document.source_ids],
         created_at=document.created_at.isoformat(),
         updated_at=document.updated_at.isoformat(),
@@ -329,7 +327,7 @@ def _metadata_out(result) -> DocumentMetadataResponse:
 
 
 def _docx_response(result) -> StreamingResponse:
-    metadata = _metadata_out(result)
+    metadata = _metadata_out(result.document)
     disposition = f"attachment; filename*=UTF-8''{quote(result.file_name)}"
     return StreamingResponse(
         BytesIO(result.file_bytes),
@@ -343,4 +341,81 @@ def _docx_response(result) -> StreamingResponse:
                 "Content-Disposition, X-Document-Metadata"
             ),
         },
+    )
+
+
+def _progressive_document_response(
+    operation: Callable[
+        [Callable[[DocumentOutput], Awaitable[None]]],
+        Awaitable[DocumentFileOutput],
+    ],
+) -> StreamingResponse:
+    boundary = "scriva-document-stream"
+
+    async def stream() -> AsyncIterator[bytes]:
+        queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+
+        async def report(metadata: DocumentOutput) -> None:
+            await queue.put(("metadata", metadata))
+
+        async def run() -> None:
+            try:
+                await queue.put(("result", await operation(report)))
+            except Exception as exc:
+                await queue.put(("error", exc))
+
+        task = asyncio.create_task(run())
+        last_metadata: DocumentMetadataResponse | None = None
+        try:
+            while True:
+                item_type, item = await queue.get()
+                if item_type == "metadata":
+                    last_metadata = _metadata_out(item)
+                    yield _json_part(boundary, last_metadata)
+                    continue
+                if item_type == "error":
+                    if (
+                        last_metadata is None
+                        or last_metadata.status != "failed"
+                    ):
+                        failed = DocumentMetadataResponse(
+                            status="failed",
+                            error_message=str(item),
+                        )
+                        yield _json_part(boundary, failed)
+                    break
+
+                result = item
+                yield _file_part(boundary, result)
+                break
+            yield f"--{boundary}--\r\n".encode()
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        stream(),
+        media_type=f'multipart/mixed; boundary="{boundary}"',
+        headers={"X-Accel-Buffering": "no"},
+    )
+
+
+def _json_part(boundary: str, metadata: DocumentMetadataResponse) -> bytes:
+    payload = json.dumps(
+        metadata.model_dump(mode="json"), ensure_ascii=True
+    ).encode()
+    return (
+        f"--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode()
+        + payload
+        + b"\r\n"
+    )
+
+
+def _file_part(boundary: str, result: DocumentFileOutput) -> bytes:
+    disposition = f"attachment; filename*=UTF-8''{quote(result.file_name)}"
+    return (
+        f"--{boundary}\r\nContent-Type: {result.content_type}\r\n"
+        f"Content-Disposition: {disposition}\r\n\r\n".encode()
+        + result.file_bytes
+        + b"\r\n"
     )

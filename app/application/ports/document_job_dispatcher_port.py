@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from uuid import UUID
 
+from application.dtos.document_dtos import DocumentProgressCallback
+
 
 class DocumentJobDispatcherPort(ABC):
     """
@@ -11,5 +13,9 @@ class DocumentJobDispatcherPort(ABC):
     """
 
     @abstractmethod
-    async def dispatch(self, document_id: UUID) -> None:
+    async def dispatch(
+        self,
+        document_id: UUID,
+        on_progress: DocumentProgressCallback | None = None,
+    ) -> None:
         raise NotImplementedError
