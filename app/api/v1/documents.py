@@ -3,10 +3,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
+import shutil
+import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from io import BytesIO
+from pathlib import Path
+from typing import BinaryIO
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from application.dtos.document_dtos import (
     AugmentDocumentInput,
@@ -45,10 +50,13 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
     UploadFile,
     status,
 )
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ValidationError
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from api.deps import (
     get_augment_document_use_case,
@@ -76,9 +84,39 @@ DOCX_MEDIA_TYPE = (
 )
 
 
+def _request_body_openapi(schema_name: str) -> dict:
+    return {
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": f"#/components/schemas/{schema_name}"}
+                },
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["payload"],
+                        "properties": {
+                            "payload": {"type": "string", "format": "json"},
+                            "files": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "format": "binary",
+                                },
+                            },
+                        },
+                    }
+                },
+            },
+        }
+    }
+
+
 @router.post(
     "/",
     response_class=StreamingResponse,
+    openapi_extra=_request_body_openapi("CreateDocumentRequest"),
     responses={
         200: {
             "description": (
@@ -89,25 +127,26 @@ DOCX_MEDIA_TYPE = (
     },
 )
 async def create_document(
-    body: CreateDocumentRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
     use_case: CreateDocumentUseCase = Depends(get_create_document_use_case),
 ) -> StreamingResponse:
+    body, cleanup = await _request_with_files(request, CreateDocumentRequest)
     try:
         document_type = DocumentType(body.document_type)
+        presentation = PresentationInfo(
+            student_name=body.user,
+            professor=body.professor,
+            subject=body.subject,
+            student_id=body.student_id,
+            institution=body.institution,
+        )
     except ValueError as exc:
+        cleanup()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid document_type '{body.document_type}': {exc}",
+            detail=str(exc),
         ) from exc
-
-    presentation = PresentationInfo(
-        student_name=body.user,
-        professor=body.professor,
-        subject=body.subject,
-        student_id=body.student_id,
-        institution=body.institution,
-    )
 
     data = CreateDocumentInput(
         user_id=current_user.id,
@@ -119,7 +158,8 @@ async def create_document(
     )
 
     return _progressive_document_response(
-        lambda on_progress: use_case.execute(data, on_progress)
+        lambda on_progress: use_case.execute(data, on_progress),
+        cleanup=cleanup,
     )
 
 
@@ -189,6 +229,7 @@ async def get_document(
 @router.patch(
     "/ai/{document_id}",
     response_class=StreamingResponse,
+    openapi_extra=_request_body_openapi("AugmentDocumentRequest"),
     responses={
         200: {
             "description": (
@@ -200,10 +241,11 @@ async def get_document(
 )
 async def augment_document(
     document_id: UUID,
-    body: AugmentDocumentRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
     use_case: AugmentDocumentUseCase = Depends(get_augment_document_use_case),
 ) -> StreamingResponse:
+    body, cleanup = await _request_with_files(request, AugmentDocumentRequest)
     data = AugmentDocumentInput(
         document_id=document_id,
         user_id=current_user.id,
@@ -211,7 +253,8 @@ async def augment_document(
         additional_notes=body.additional_notes,
     )
     return _progressive_document_response(
-        lambda on_progress: use_case.execute(data, on_progress)
+        lambda on_progress: use_case.execute(data, on_progress),
+        cleanup=cleanup,
     )
 
 
@@ -350,6 +393,7 @@ def _progressive_document_response(
         [Callable[[DocumentOutput], Awaitable[None]]],
         Awaitable[DocumentFileOutput],
     ],
+    cleanup: Callable[[], None] | None = None,
 ) -> StreamingResponse:
     boundary = "scriva-document-stream"
 
@@ -394,12 +438,128 @@ def _progressive_document_response(
         finally:
             if not task.done():
                 task.cancel()
+            if cleanup is not None:
+                await asyncio.to_thread(cleanup)
 
     return StreamingResponse(
         stream(),
         media_type=f'multipart/mixed; boundary="{boundary}"',
         headers={"X-Accel-Buffering": "no"},
     )
+
+
+async def _request_with_files[RequestModel: BaseModel](
+    request: Request,
+    model: type[RequestModel],
+) -> tuple[RequestModel, Callable[[], None]]:
+    content_type = request.headers.get("content-type", "").lower()
+    temporary_directory: tempfile.TemporaryDirectory[str] | None = None
+
+    try:
+        if content_type.startswith("multipart/form-data"):
+            form = await request.form()
+            payload = form.get("payload")
+            if not isinstance(payload, str):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        "Multipart requests require a 'payload' field "
+                        "containing the JSON request."
+                    ),
+                )
+            raw_data = json.loads(payload)
+            if not isinstance(raw_data, dict):
+                raise ValueError(
+                    "The multipart payload must be a JSON object."
+                )
+
+            uploads = [
+                item
+                for item in form.getlist("files")
+                if isinstance(item, StarletteUploadFile)
+            ]
+            if uploads:
+                temporary_directory = tempfile.TemporaryDirectory(
+                    prefix="scriva-sources-",
+                    dir=_temporary_upload_root(),
+                )
+                paths = await _copy_uploads(
+                    uploads, Path(temporary_directory.name)
+                )
+                raw_data["sources"] = [
+                    *(raw_data.get("sources") or []),
+                    *paths,
+                ]
+        elif content_type.startswith("application/json"):
+            raw_data = await request.json()
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail=(
+                    "Use application/json or multipart/form-data with "
+                    "'payload' and 'files' fields."
+                ),
+            )
+
+        parsed = model.model_validate(raw_data)
+    except json.JSONDecodeError as exc:
+        if temporary_directory is not None:
+            temporary_directory.cleanup()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid JSON payload: {exc.msg}.",
+        ) from exc
+    except (TypeError, ValueError, ValidationError) as exc:
+        if temporary_directory is not None:
+            temporary_directory.cleanup()
+        detail = (
+            exc.errors(include_context=False)
+            if isinstance(exc, ValidationError)
+            else str(exc)
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=detail,
+        ) from exc
+    except Exception:
+        if temporary_directory is not None:
+            temporary_directory.cleanup()
+        raise
+
+    cleanup = (
+        temporary_directory.cleanup
+        if temporary_directory is not None
+        else lambda: None
+    )
+    return parsed, cleanup
+
+
+def _temporary_upload_root() -> str | None:
+    memory_directory = "/dev/shm"
+    if os.path.isdir(memory_directory) and os.access(
+        memory_directory, os.W_OK
+    ):
+        return memory_directory
+    return None
+
+
+async def _copy_uploads(
+    uploads: list[StarletteUploadFile], destination: Path
+) -> list[str]:
+    paths: list[str] = []
+    for upload in uploads:
+        suffix = Path(upload.filename or "").suffix.lower()
+        path = destination / f"{uuid4()}{suffix}"
+        await asyncio.to_thread(_copy_file, upload.file, path)
+        await upload.close()
+        paths.append(str(path))
+    return paths
+
+
+def _copy_file(source: BinaryIO, destination: Path) -> None:
+    source.seek(0)
+    with destination.open("wb") as output:
+        shutil.copyfileobj(source, output)
 
 
 def _json_part(boundary: str, metadata: DocumentMetadataResponse) -> bytes:

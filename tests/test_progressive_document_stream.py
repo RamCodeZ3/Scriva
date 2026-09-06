@@ -2,6 +2,7 @@ import json
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
+from unittest.mock import Mock
 from uuid import uuid4
 
 from api.v1.documents import _progressive_document_response
@@ -18,6 +19,7 @@ from domain.value_objects.presentation_info import PresentationInfo
 class ProgressiveDocumentStreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_streams_metadata_states_and_docx(self) -> None:
         metadata = _metadata(DocumentStatus.EXTRACTING)
+        cleanup = Mock()
 
         async def operation(report):
             for state in (
@@ -34,7 +36,10 @@ class ProgressiveDocumentStreamTests(unittest.IsolatedAsyncioTestCase):
                 content_type="application/docx",
             )
 
-        response = _progressive_document_response(operation)
+        response = _progressive_document_response(
+            operation,
+            cleanup=cleanup,
+        )
         body = b"".join([chunk async for chunk in response.body_iterator])
         json_parts = _json_parts(body)
 
@@ -53,6 +58,7 @@ class ProgressiveDocumentStreamTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(b"Content-Disposition: attachment", body)
         self.assertIn(b"docx-content", body)
+        cleanup.assert_called_once_with()
 
     async def test_streams_failed_metadata_for_fatal_error(self) -> None:
         async def operation(report):

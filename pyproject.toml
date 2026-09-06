@@ -12,6 +12,7 @@ dependencies = [
     "google-api-python-client>=2.196.0",
     "google-genai>=2.0.0",
     "jwt>=1.4.0",
+    "openai-whisper>=20250625",
     "playwright>=1.62.0",
     "python-docx>=1.2.0",
     "python-multipart>=0.0.20",

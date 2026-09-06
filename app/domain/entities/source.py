@@ -57,6 +57,9 @@ def classify_source(raw: str) -> tuple[SourceType, FileKind | None]:
     if ext in _AUDIO_EXTS:
         return SourceType.FILE, FileKind.AUDIO
 
+    if os.path.isfile(text):
+        return SourceType.FILE, None
+
     if _URL_RE.match(text):
         return SourceType.WEB, None
 

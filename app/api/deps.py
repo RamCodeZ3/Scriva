@@ -75,6 +75,9 @@ from infrastructure.extractors.text_extractor_adapter import (
     PlainTextExtractorAdapter,
 )
 from infrastructure.extractors.web_extractor_adapter import WebExtractorAdapter
+from infrastructure.extractors.whisper_media_extractor_adapter import (
+    WhisperMediaExtractorAdapter,
+)
 from infrastructure.extractors.youtube_extractor_adapter import (
     YoutubeExtractorAdapter,
 )
@@ -120,11 +123,17 @@ def get_jwt_auth() -> SupabaseJWTAuth:
 
 @lru_cache
 def get_extractor_factory() -> ExtractorFactoryPort:
+    media_extractor = WhisperMediaExtractorAdapter(
+        model_name=os.environ.get("WHISPER_MODEL", "base"),
+        device=os.environ.get("WHISPER_DEVICE"),
+    )
     return ExtractorFactoryAdapter(
         {
             SourceType.WEB: WebExtractorAdapter(),
             SourceType.YOUTUBE: YoutubeExtractorAdapter(),
-            SourceType.FILE: FileExtractorAdapter(),
+            SourceType.FILE: FileExtractorAdapter(
+                media_extractor=media_extractor
+            ),
             SourceType.TEXT: PlainTextExtractorAdapter(),
         }
     )
