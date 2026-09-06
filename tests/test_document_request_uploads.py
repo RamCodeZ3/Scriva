@@ -5,6 +5,7 @@ from pathlib import Path
 
 from api.schemas.documents import AugmentDocumentRequest
 from api.v1.documents import _request_with_files
+from fastapi import HTTPException
 from starlette.datastructures import FormData, Headers, UploadFile
 
 
@@ -42,6 +43,56 @@ class DocumentRequestUploadTests(unittest.IsolatedAsyncioTestCase):
         cleanup()
 
         self.assertEqual(body.sources, ["Plain text"])
+
+    async def test_accepts_files_when_sources_is_empty(self) -> None:
+        upload = UploadFile(
+            BytesIO(b"audio-bytes"),
+            filename="recording.mp3",
+        )
+        request = _Request(
+            "multipart/form-data; boundary=test",
+            form=FormData(
+                [
+                    ("payload", json.dumps({"sources": []})),
+                    ("files", upload),
+                ]
+            ),
+        )
+
+        body, cleanup = await _request_with_files(
+            request, AugmentDocumentRequest
+        )
+        uploaded_path = Path(body.sources[0])
+
+        self.assertEqual(uploaded_path.read_bytes(), b"audio-bytes")
+        cleanup()
+        self.assertFalse(uploaded_path.exists())
+
+    async def test_accepts_sources_without_files(self) -> None:
+        request = _Request(
+            "multipart/form-data; boundary=test",
+            form=FormData(
+                [("payload", json.dumps({"sources": ["Plain text"]}))]
+            ),
+        )
+
+        body, cleanup = await _request_with_files(
+            request, AugmentDocumentRequest
+        )
+        cleanup()
+
+        self.assertEqual(body.sources, ["Plain text"])
+
+    async def test_rejects_request_without_sources_or_files(self) -> None:
+        request = _Request(
+            "multipart/form-data; boundary=test",
+            form=FormData([("payload", json.dumps({"sources": []}))]),
+        )
+
+        with self.assertRaises(HTTPException) as context:
+            await _request_with_files(request, AugmentDocumentRequest)
+
+        self.assertEqual(context.exception.status_code, 422)
 
     async def test_adds_uploaded_files_and_removes_them_on_cleanup(
         self,

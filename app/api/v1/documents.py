@@ -95,7 +95,7 @@ def _request_body_openapi(schema_name: str) -> dict:
                 "multipart/form-data": {
                     "schema": {
                         "type": "object",
-                        "required": ["payload", "files"],
+                        "required": ["payload"],
                         "properties": {
                             "payload": {"type": "string", "format": "json"},
                             "files": {
@@ -461,7 +461,7 @@ async def _request_with_files[RequestModel: BaseModel](
             payload = form.get("payload")
             if not isinstance(payload, str):
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=(
                         "Multipart requests require a 'payload' field "
                         "containing the JSON request."
@@ -506,7 +506,7 @@ async def _request_with_files[RequestModel: BaseModel](
         if temporary_directory is not None:
             temporary_directory.cleanup()
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Invalid JSON payload: {exc.msg}.",
         ) from exc
     except (TypeError, ValueError, ValidationError) as exc:
@@ -518,7 +518,7 @@ async def _request_with_files[RequestModel: BaseModel](
             else str(exc)
         )
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=detail,
         ) from exc
     except Exception:

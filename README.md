@@ -44,7 +44,9 @@ explicit runtime device is required. FFmpeg must be available on `PATH`.
 Document creation and AI augmentation continue to accept their existing JSON
 bodies. To include local files, send `multipart/form-data` with `payload`
 containing that same JSON object and repeat the `files` field for every
-upload. Uploaded files exist only in an isolated temporary directory while the
+upload. `sources` may be empty when at least one file is present, and files
+may be omitted when `sources` contains at least one item. Uploaded files
+exist only in an isolated temporary directory while the
 document stream is running. Linux uses memory-backed `/dev/shm` when
 available; other environments use their system temporary directory. Files are
 removed when the stream finishes or is cancelled.
