@@ -49,7 +49,6 @@ class GetDocumentUseCase:
             status=document.status,
             sections=document.sections,
             user_id=document.user_id,
-            presentation=document.presentation,
             error_message=document.error_message,
             source_ids=[s.id for s in document.raw_sources],
             source_errors=build_source_errors(document.raw_sources),

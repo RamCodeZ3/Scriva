@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from uuid import UUID
 
+from domain.value_objects.presentation_info import PresentationInfo
+
 from application.dtos.document_dtos import DocumentProgressCallback
 
 
@@ -16,6 +18,8 @@ class DocumentJobDispatcherPort(ABC):
     async def dispatch(
         self,
         document_id: UUID,
+        presentation: PresentationInfo,
+        additional_notes: str | None = None,
         on_progress: DocumentProgressCallback | None = None,
     ) -> None:
         raise NotImplementedError

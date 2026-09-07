@@ -145,7 +145,7 @@ _NODE_SCHEMA_RULES = (
     "  NEVER type a page number into paragraph text anywhere in the "
     'document (no "Página 1", no "[page X]", no manual folio). The '
     "application draws real page numbers itself from "
-    "'document_styles.showPageNumbers' / 'pageNumberPosition'.\n"
+    "'document_style.showPageNumbers' / 'pageNumberPosition'.\n"
     "Rules that still apply regardless of node type:\n"
     "- Lists are the exception, not the default: most content must be "
     "'paragraph' nodes. Every item in a list must be grammatically "

@@ -32,7 +32,6 @@ from domain.value_objects.document_node import (
     text_node,
 )
 from domain.value_objects.document_type import DocumentType
-from domain.value_objects.presentation_info import PresentationInfo
 from infrastructure.export.docx_document_exporter_adapter import (
     DocxDocumentExporterAdapter,
 )
@@ -392,7 +391,6 @@ def _document_fixture() -> Document:
         title="TOC test",
         document_type=DocumentType.REPORT,
         raw_sources=[],
-        presentation=PresentationInfo("Student", "Professor"),
         status=DocumentStatus.DONE,
         sections=sections,
         sources=[],

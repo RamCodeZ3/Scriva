@@ -14,7 +14,6 @@ from domain.value_objects.apa_structure import (
     APASectionType,
 )
 from domain.value_objects.document_type import DocumentType
-from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
 
 
@@ -42,7 +41,6 @@ class Document:
     title: str
     document_type: DocumentType
     raw_sources: list[Source]
-    presentation: PresentationInfo
     status: DocumentStatus
     sections: list[APASection]
     sources: list[SourceReference]
@@ -50,8 +48,7 @@ class Document:
     updated_at: datetime
     error_message: str | None = None
     error_stage: str | None = None
-    additional_notes: str | None = None
-    document_styles: dict[str, Any] = field(
+    document_style: dict[str, Any] = field(
         default_factory=lambda: dict(APA7_DOCUMENT_STYLES)
     )
 
@@ -62,8 +59,6 @@ class Document:
         title: str,
         document_type: DocumentType,
         raw_sources: list[Source],
-        presentation: PresentationInfo,
-        additional_notes: str | None = None,
     ) -> Document:
         if not raw_sources:
             raise DocumentBuildError("A document needs at least one source.")
@@ -75,13 +70,11 @@ class Document:
             title=title,
             document_type=document_type,
             raw_sources=raw_sources,
-            presentation=presentation,
             status=DocumentStatus.PENDING,
             sections=[],
             sources=[],
             created_at=now,
             updated_at=now,
-            additional_notes=additional_notes,
         )
 
     def start_extraction(self) -> None:
@@ -117,7 +110,7 @@ class Document:
         title: str,
         sections: list[APASection],
         sources: list[SourceReference],
-        document_styles: dict[str, Any] | None = None,
+        document_style: dict[str, Any] | None = None,
     ) -> None:
         self._assert_status(DocumentStatus.DRAFTING)
         self._validate_sections(sections)
@@ -125,8 +118,8 @@ class Document:
         self.title = title
         self.sections = sorted(sections, key=lambda s: s.section_type.order)
         self.sources = sources
-        if document_styles is not None:
-            self.document_styles = document_styles
+        if document_style is not None:
+            self.document_style = document_style
         self.status = DocumentStatus.DONE
         self._touch()
 
@@ -134,8 +127,7 @@ class Document:
         self,
         title: str | None = None,
         sections: list[APASection] | None = None,
-        presentation: PresentationInfo | None = None,
-        document_styles: dict[str, Any] | None = None,
+        document_style: dict[str, Any] | None = None,
     ) -> None:
         if title is not None:
             self.title = title
@@ -143,10 +135,8 @@ class Document:
             self.sections = sorted(
                 sections, key=lambda s: s.section_type.order
             )
-        if presentation is not None:
-            self.presentation = presentation
-        if document_styles is not None:
-            self.document_styles = document_styles
+        if document_style is not None:
+            self.document_style = document_style
         self._touch()
 
     def augment(
@@ -201,7 +191,7 @@ class Document:
 
     def to_node_tree(self) -> dict[str, Any]:
         """Serialize the whole document as a single ProseMirror-like tree:
-        `{meta, document_styles, children}`. This is the shape a node-based
+        `{meta, document_style, children}`. This is the shape a node-based
         renderer/editor (and the API layer) should consume directly."""
         children: list[dict[str, Any]] = []
         for section in self.sections:
@@ -210,7 +200,7 @@ class Document:
 
         return {
             "meta": {"title": self.title, "style_guide": "APA7"},
-            "document_styles": dict(self.document_styles),
+            "document_style": dict(self.document_style),
             "children": children,
         }
 

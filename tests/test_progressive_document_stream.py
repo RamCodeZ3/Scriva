@@ -13,7 +13,6 @@ from application.dtos.document_dtos import (
 )
 from domain.entities.document import DocumentStatus
 from domain.value_objects.document_type import DocumentType
-from domain.value_objects.presentation_info import PresentationInfo
 
 
 class ProgressiveDocumentStreamTests(unittest.IsolatedAsyncioTestCase):
@@ -88,13 +87,6 @@ def _metadata(status: DocumentStatus) -> DocumentOutput:
         status=status,
         sections=[],
         user_id=uuid4(),
-        presentation=PresentationInfo(
-            student_name="Student",
-            professor="Professor",
-            subject="Subject",
-            student_id="1",
-            institution="Institution",
-        ),
         error_message=None,
         source_ids=[source_id],
         source_errors=[

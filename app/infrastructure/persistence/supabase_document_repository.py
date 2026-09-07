@@ -19,7 +19,6 @@ from domain.value_objects.apa_structure import (
 )
 from domain.value_objects.document_node import DocumentNode
 from domain.value_objects.document_type import DocumentType
-from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
 from supabase import Client
 
@@ -111,16 +110,14 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             "title": document.title,
             "document_type": document.document_type.value,
             "source_ids": [str(s.id) for s in document.raw_sources],
-            "presentation": _to_jsonable(document.presentation),
             "status": document.status.value,
-            "sections": [_section_to_dict(s) for s in document.sections],
+            "node_tree": [_section_to_dict(s) for s in document.sections],
             "sources": [_to_jsonable(s) for s in document.sources],
-            "document_styles": dict(document.document_styles),
+            "document_style": dict(document.document_style),
             "created_at": document.created_at.isoformat(),
             "updated_at": document.updated_at.isoformat(),
             "error_message": document.error_message,
             "error_stage": document.error_stage,
-            "additional_notes": document.additional_notes,
         }
 
     async def _to_entity(self, row: dict) -> Document:
@@ -140,17 +137,19 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             title=row["title"],
             document_type=DocumentType(row["document_type"]),
             raw_sources=raw_sources,
-            presentation=PresentationInfo(**row["presentation"]),
             status=DocumentStatus(row["status"]),
-            sections=[_section_from_dict(s) for s in row["sections"]],
+            sections=[
+                _section_from_dict(s)
+                for s in row.get("node_tree", row.get("sections", []))
+            ],
             sources=[SourceReference(**s) for s in row["sources"]],
-            document_styles=row.get("document_styles")
+            document_style=row.get("document_style")
+            or row.get("document_styles")
             or dict(APA7_DOCUMENT_STYLES),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             error_message=row.get("error_message"),
             error_stage=row.get("error_stage"),
-            additional_notes=row.get("additional_notes"),
         )
 
     async def _to_document_reference(self, row: dict) -> DocumentReference:
