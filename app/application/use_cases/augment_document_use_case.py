@@ -91,11 +91,17 @@ class AugmentDocumentUseCase:
                 for i, s in enumerate(extracted_sources)
             )
             error_stage = "ai_expansion"
-            title, sections, references = await self._writer.augment(
+            (
+                title,
+                sections,
+                references,
+                global_style,
+            ) = await self._writer.augment(
                 existing_sections=document.sections,
                 existing_references=document.sources,
                 new_content=new_content,
                 document_type=document.document_type,
+                existing_global_style=document.global_style,
                 additional_notes=data.additional_notes,
             )
 
@@ -116,6 +122,9 @@ class AugmentDocumentUseCase:
                 sections=sections,
                 sources=references,
                 new_raw_sources=new_sources,
+            )
+            document.update_content(
+                global_style={**document.global_style, **global_style}
             )
             await self._documents.save(document)
         except Exception as exc:

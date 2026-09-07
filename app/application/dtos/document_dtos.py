@@ -62,7 +62,6 @@ class DocumentOutput:
     status: DocumentStatus
     sections: list[APASection]
     user_id: UUID
-    presentation: PresentationInfo
     error_message: str | None
     source_ids: list[UUID]
     created_at: datetime
@@ -82,7 +81,6 @@ def document_to_output(document: Document) -> DocumentOutput:
         status=document.status,
         sections=document.sections,
         user_id=document.user_id,
-        presentation=document.presentation,
         error_message=document.error_message,
         error_stage=document.error_stage,
         source_ids=[source.id for source in document.raw_sources],
@@ -106,7 +104,6 @@ class UpdateDocumentInput:
     user_id: UUID
     title: str | None = None
     sections: list[APASection] | None = None
-    presentation: PresentationInfo | None = None
     docx_bytes: bytes | None = None
 
 

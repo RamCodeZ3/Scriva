@@ -2,6 +2,7 @@ from uuid import UUID
 
 from domain.entities.document import Document
 from domain.entities.source import Source
+from domain.value_objects.presentation_info import PresentationInfo
 
 from application.dtos.document_dtos import (
     DocumentProgressCallback,
@@ -34,6 +35,8 @@ class ProcessDocumentUseCase:
     async def execute(
         self,
         document_id: UUID,
+        presentation: PresentationInfo,
+        additional_notes: str | None = None,
         on_progress: DocumentProgressCallback | None = None,
     ) -> None:
         document = await self._documents.get_by_id(document_id)
@@ -74,19 +77,27 @@ class ProcessDocumentUseCase:
             await self._report(document, on_progress)
 
             error_stage = "ai_generation"
-            title, sections, references = await self._writer.write(
+            (
+                title,
+                sections,
+                references,
+                global_style,
+            ) = await self._writer.write(
                 source_content=combined_content,
                 title=document.title,
                 document_type=document.document_type,
-                presentation=document.presentation,
-                additional_notes=document.additional_notes,
+                presentation=presentation,
+                additional_notes=additional_notes,
             )
             error_stage = "document_drafting"
             document.start_drafting()
             await self._documents.save(document)
             await self._report(document, on_progress)
             document.complete(
-                title=title, sections=sections, sources=references
+                title=title,
+                sections=sections,
+                sources=references,
+                global_style={**document.global_style, **global_style},
             )
             await self._documents.save(document)
 

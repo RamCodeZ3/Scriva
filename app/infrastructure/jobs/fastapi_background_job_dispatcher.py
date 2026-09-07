@@ -9,6 +9,7 @@ from application.ports.document_job_dispatcher_port import (
 from application.use_cases.process_document_use_case import (
     ProcessDocumentUseCase,
 )
+from domain.value_objects.presentation_info import PresentationInfo
 from fastapi import BackgroundTasks
 
 
@@ -24,13 +25,25 @@ class FastAPIBackgroundJobDispatcher(DocumentJobDispatcherPort):
     async def dispatch(
         self,
         document_id: UUID,
+        presentation: PresentationInfo,
+        additional_notes: str | None = None,
         on_progress: DocumentProgressCallback | None = None,
     ) -> None:
-        self._background_tasks.add_task(self._run, document_id, on_progress)
+        self._background_tasks.add_task(
+            self._run,
+            document_id,
+            presentation,
+            additional_notes,
+            on_progress,
+        )
 
     async def _run(
         self,
         document_id: UUID,
+        presentation: PresentationInfo,
+        additional_notes: str | None,
         on_progress: DocumentProgressCallback | None,
     ) -> None:
-        await self._process_use_case.execute(document_id, on_progress)
+        await self._process_use_case.execute(
+            document_id, presentation, additional_notes, on_progress
+        )

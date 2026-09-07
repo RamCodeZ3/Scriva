@@ -57,13 +57,16 @@ class CreateDocumentUseCase:
             title=data.title,
             document_type=data.document_type,
             raw_sources=raw_sources,
-            presentation=data.presentation,
-            additional_notes=data.additional_notes,
         )
         await self._documents.save(document)
 
         try:
-            await self._dispatcher.dispatch(document.id, on_progress)
+            await self._dispatcher.dispatch(
+                document.id,
+                data.presentation,
+                data.additional_notes,
+                on_progress,
+            )
         except Exception:
             pass
 

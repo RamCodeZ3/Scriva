@@ -142,7 +142,7 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
     def _build_with_toc_entries(
         self, document: Document
     ) -> tuple[bytes, list[tuple[int, str, int]]]:
-        doc_styles = normalize_document_styles(document.document_styles)
+        doc_styles = normalize_document_styles(document.global_style)
         page_size = _resolve_page_size(doc_styles)
         margins = _resolve_margins(doc_styles)
         content_width = page_size[0] - margins["left"] - margins["right"]
