@@ -93,7 +93,7 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
 
     def _build_sync(self, document: Document) -> bytes:
         toc_entries = PdfDocumentExporterAdapter().build_toc_entries(document)
-        doc_styles = normalize_document_styles(document.document_style)
+        doc_styles = normalize_document_styles(document.global_style)
         docx = DocxDocument()
         content_width_pt = _setup_page(docx, doc_styles)
         styles = _build_styles(docx, doc_styles)

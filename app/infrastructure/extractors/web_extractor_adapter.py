@@ -23,22 +23,19 @@ class WebExtractorAdapter(SourceExtractorPort):
         try:
             async with async_playwright() as pw:
                 browser = await pw.chromium.launch(
-                    headless=False,
+                    headless=True,
                     args=[
                         "--disable-dev-shm-usage",
                         "--disable-gpu",
                         "--disable-images",
                         "--blink-settings=imagesEnabled=false",
-                    ]
+                    ],
                 )
 
                 try:
                     page = await browser.new_page()
-                    
-                    await page.route(
-                        "**/*.", 
-                        lambda route: route.abort()
-                    )
+
+                    await page.route("**/*.", lambda route: route.abort())
 
                     await page.goto(
                         raw,
@@ -65,4 +62,3 @@ def _clean_text(text: str) -> str:
     lines = [line.strip() for line in text.splitlines()]
     lines = [line for line in lines if line]
     return "\n".join(lines)
-

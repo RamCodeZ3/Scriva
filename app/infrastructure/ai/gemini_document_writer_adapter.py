@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import replace as _with_replaced
+from typing import Any
 
 from application.ports.document_writer_port import DocumentWriterPort
 from domain.exceptions import DocumentBuildError
@@ -50,6 +51,21 @@ _SECTION_ORDER = [
 _AI_SECTION_ORDER = [
     s for s in _SECTION_ORDER if s is not APASectionType.INDEX
 ]
+
+_GLOBAL_STYLE_KEYS = frozenset(
+    {
+        "fontFamily",
+        "fontSize",
+        "color",
+        "backgroundColor",
+        "pageMargin",
+        "pageSize",
+        "orientation",
+        "lineHeight",
+        "showPageNumbers",
+        "pageNumberPosition",
+    }
+)
 
 
 def _ensure_trailing_page_break(section: APASection) -> APASection:
@@ -145,7 +161,7 @@ _NODE_SCHEMA_RULES = (
     "  NEVER type a page number into paragraph text anywhere in the "
     'document (no "Página 1", no "[page X]", no manual folio). The '
     "application draws real page numbers itself from "
-    "'document_style.showPageNumbers' / 'pageNumberPosition'.\n"
+    "'global_style.showPageNumbers' / 'pageNumberPosition'.\n"
     "Rules that still apply regardless of node type:\n"
     "- Lists are the exception, not the default: most content must be "
     "'paragraph' nodes. Every item in a list must be grammatically "
@@ -218,6 +234,11 @@ _SYSTEM_INSTRUCTION = (
     "only for what was actually requested, nothing more.\n"
     "13. The 'conclusion' section's LAST node must be a "
     '{"type": "page-break"} node — see the page-break rule above.\n'
+    "14. Return 'global_style' as an empty object unless the user's "
+    "additional notes explicitly request a document-wide format change. "
+    "When explicitly requested, include only the keys that must change; "
+    "never repeat defaults there. Node-specific formatting still belongs "
+    "in node 'styles' or text 'marks'.\n"
     "You always answer with a single JSON object and nothing else — no "
     "markdown fences, no commentary, no preamble."
 )
@@ -267,6 +288,10 @@ _AUGMENT_SYSTEM_INSTRUCTION = (
     "request) explicitly asked for. Only add new 'styles'/'marks' if the "
     "current additional notes explicitly request them, and never invent "
     "'image' nodes yourself.\n"
+    "14. Return 'global_style' as an empty object unless the CURRENT "
+    "additional notes explicitly request a document-wide format change. "
+    "If requested, return only changed keys. Do not echo or reset the "
+    "existing global styles supplied in the prompt.\n"
     "You always answer with a single JSON object and nothing else — no "
     "markdown fences, no commentary, no preamble."
 )
@@ -293,6 +318,7 @@ _GENERIC_INTRODUCTION_TITLES = frozenset(
 _RESPONSE_SHAPE_HINT = """
 {
   "title": "A short, original academic title you write yourself",
+  "global_style": {},
   "sections": [
     {"section_type": "presentation", "title": "...", "nodes": [ BLOCK, ... ]},
     {"section_type": "introduction",
@@ -312,6 +338,7 @@ _RESPONSE_SHAPE_HINT = """
 _AUGMENT_RESPONSE_SHAPE_HINT = """
 {
   "title": "usually the same title as before, unless it must change",
+  "global_style": {},
   "sections": [
     {"section_type": "introduction", "unchanged": true},
     {"section_type": "body", "title": "...", "nodes": [ BLOCK, ... ]},
@@ -340,7 +367,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         document_type: DocumentType,
         presentation: PresentationInfo,
         additional_notes: str | None = None,
-    ) -> tuple[str, list[APASection], list[SourceReference]]:
+    ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
         prompt = self._build_prompt(
             source_content=source_content,
             title=title,
@@ -351,8 +378,15 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         raw_text = await self._generate(
             prompt, system_instruction=_SYSTEM_INSTRUCTION
         )
-        title_out, sections, references = self._parse_response(raw_text)
-        return title_out, self._finalize_sections(sections), references
+        title_out, sections, references, global_style = self._parse_response(
+            raw_text
+        )
+        return (
+            title_out,
+            self._finalize_sections(sections),
+            references,
+            global_style,
+        )
 
     async def augment(
         self,
@@ -361,22 +395,31 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         existing_references: list[SourceReference],
         new_content: str,
         document_type: DocumentType,
+        existing_global_style: dict[str, Any],
         additional_notes: str | None = None,
-    ) -> tuple[str, list[APASection], list[SourceReference]]:
+    ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
         prompt = self._build_augment_prompt(
             existing_sections=existing_sections,
             existing_references=existing_references,
             new_content=new_content,
             document_type=document_type,
+            existing_global_style=existing_global_style,
             additional_notes=additional_notes,
         )
         raw_text = await self._generate(
             prompt, system_instruction=_AUGMENT_SYSTEM_INSTRUCTION
         )
-        title_out, sections, references = self._parse_augment_response(
-            raw_text, existing_sections=existing_sections
+        title_out, sections, references, global_style = (
+            self._parse_augment_response(
+                raw_text, existing_sections=existing_sections
+            )
         )
-        return title_out, self._finalize_sections(sections), references
+        return (
+            title_out,
+            self._finalize_sections(sections),
+            references,
+            global_style,
+        )
 
     def _finalize_sections(
         self, sections: list[APASection]
@@ -468,7 +511,8 @@ Respond with a single JSON object shaped exactly like this:
         existing_references: list[SourceReference],
         new_content: str,
         document_type: DocumentType,
-        additional_notes: str | None,
+        existing_global_style: dict[str, Any] | None = None,
+        additional_notes: str | None = None,
     ) -> str:
         notes = _clean_notes(additional_notes)
         existing_sections_json = json.dumps(
@@ -504,6 +548,10 @@ Existing sections (JSON, one entry per section_type): {existing_sections_json}
 
 Existing references (JSON): {existing_refs_json}
 
+Existing global styles (preserve every value unless the current additional
+notes explicitly request a document-wide formatting change):
+{json.dumps(existing_global_style or {}, ensure_ascii=False)}
+
 User's additional notes for this update: {notes}
 
 New source material to incorporate:
@@ -522,7 +570,7 @@ de-duplicated list (old entries plus any genuinely new ones).
 
     def _parse_response(
         self, raw_text: str
-    ) -> tuple[str, list[APASection], list[SourceReference]]:
+    ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
         data = _decode_json(raw_text)
         title = self._validate_title(data.get("title"), field="title")
 
@@ -535,11 +583,11 @@ de-duplicated list (old entries plus any genuinely new ones).
             for s in raw_sections
         ]
         references = self._parse_references(data)
-        return title, sections, references
+        return title, sections, references, _parse_global_style(data)
 
     def _parse_augment_response(
         self, raw_text: str, *, existing_sections: list[APASection]
-    ) -> tuple[str, list[APASection], list[SourceReference]]:
+    ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
         data = _decode_json(raw_text)
         title = self._validate_title(data.get("title"), field="title")
 
@@ -573,7 +621,7 @@ de-duplicated list (old entries plus any genuinely new ones).
             )
 
         references = self._parse_references(data)
-        return title, sections, references
+        return title, sections, references, _parse_global_style(data)
 
     def _build_section(
         self, raw: dict, *, introduction_fallback: str | None = None
@@ -629,6 +677,15 @@ de-duplicated list (old entries plus any genuinely new ones).
         *,
         introduction_fallback: str | None,
     ) -> str:
+        if section_type is APASectionType.PRESENTATION:
+            if introduction_fallback is None:
+                raise DocumentBuildError(
+                    "The presentation page requires the document title."
+                )
+            return self._validate_title(
+                introduction_fallback,
+                field="presentation title",
+            )
         if section_type is not APASectionType.INTRODUCTION:
             return title
         if not _is_generic_introduction_title(title):
@@ -692,6 +749,17 @@ def _clean_notes(additional_notes: str | None) -> str:
         if additional_notes and additional_notes.strip()
         else "None"
     )
+
+
+def _parse_global_style(data: dict) -> dict[str, Any]:
+    raw = data.get("global_style") or {}
+    if not isinstance(raw, dict):
+        raise DocumentBuildError("'global_style' must be a JSON object.")
+    unknown = set(raw) - _GLOBAL_STYLE_KEYS
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise DocumentBuildError(f"Unknown global style fields: {names}.")
+    return dict(raw)
 
 
 def _is_generic_introduction_title(title: str) -> bool:

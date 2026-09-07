@@ -48,7 +48,7 @@ class Document:
     updated_at: datetime
     error_message: str | None = None
     error_stage: str | None = None
-    document_style: dict[str, Any] = field(
+    global_style: dict[str, Any] = field(
         default_factory=lambda: dict(APA7_DOCUMENT_STYLES)
     )
 
@@ -110,7 +110,7 @@ class Document:
         title: str,
         sections: list[APASection],
         sources: list[SourceReference],
-        document_style: dict[str, Any] | None = None,
+        global_style: dict[str, Any] | None = None,
     ) -> None:
         self._assert_status(DocumentStatus.DRAFTING)
         self._validate_sections(sections)
@@ -118,8 +118,8 @@ class Document:
         self.title = title
         self.sections = sorted(sections, key=lambda s: s.section_type.order)
         self.sources = sources
-        if document_style is not None:
-            self.document_style = document_style
+        if global_style is not None:
+            self.global_style = global_style
         self.status = DocumentStatus.DONE
         self._touch()
 
@@ -127,7 +127,7 @@ class Document:
         self,
         title: str | None = None,
         sections: list[APASection] | None = None,
-        document_style: dict[str, Any] | None = None,
+        global_style: dict[str, Any] | None = None,
     ) -> None:
         if title is not None:
             self.title = title
@@ -135,8 +135,8 @@ class Document:
             self.sections = sorted(
                 sections, key=lambda s: s.section_type.order
             )
-        if document_style is not None:
-            self.document_style = document_style
+        if global_style is not None:
+            self.global_style = global_style
         self._touch()
 
     def augment(
@@ -190,17 +190,20 @@ class Document:
         )
 
     def to_node_tree(self) -> dict[str, Any]:
-        """Serialize the whole document as a single ProseMirror-like tree:
-        `{meta, document_style, children}`. This is the shape a node-based
-        renderer/editor (and the API layer) should consume directly."""
+        """Serialize the complete document as its canonical node tree.
+
+        Global styles are root metadata and never content children. A block's
+        ``styles`` and a text leaf's ``marks`` remain local overrides.
+        """
         children: list[dict[str, Any]] = []
         for section in self.sections:
             children.append(section.heading.to_dict())
             children.extend(node.to_dict() for node in section.body_nodes)
 
         return {
+            "type": "document",
             "meta": {"title": self.title, "style_guide": "APA7"},
-            "document_style": dict(self.document_style),
+            "global_style": dict(self.global_style),
             "children": children,
         }
 
