@@ -30,6 +30,7 @@ ENDNOTE = "endnote"
 HYPERLINK = "hyperlink"
 BOOKMARK = "bookmark"
 TAB = "tab"
+IMAGE_INLINE = "image-inline"
 
 HEADING_TYPES = frozenset(
     {HEADING_1, HEADING_2, HEADING_3, HEADING_4, HEADING_5}
@@ -38,7 +39,15 @@ LIST_TYPES = frozenset({BULLETED_LIST, NUMBERED_LIST})
 TABLE_TYPES = frozenset({TABLE, TABLE_ROW, TABLE_CELL})
 NOTE_TYPES = frozenset({FOOTNOTE, ENDNOTE})
 ATOMIC_BLOCK_TYPES = frozenset(
-    {IMAGE, PAGE_BREAK, SECTION_BREAK, TABLE_OF_CONTENTS, FIELD, TAB}
+    {
+        IMAGE,
+        IMAGE_INLINE,
+        PAGE_BREAK,
+        SECTION_BREAK,
+        TABLE_OF_CONTENTS,
+        FIELD,
+        TAB,
+    }
 )
 CONTAINER_BLOCK_TYPES = (
     HEADING_TYPES
@@ -49,9 +58,9 @@ CONTAINER_BLOCK_TYPES = (
 )
 BLOCK_TYPES = CONTAINER_BLOCK_TYPES | ATOMIC_BLOCK_TYPES
 INLINE_BLOCK_TYPES = frozenset(
-    {FIELD, FOOTNOTE, ENDNOTE, HYPERLINK, BOOKMARK, TAB}
+    {FIELD, FOOTNOTE, ENDNOTE, HYPERLINK, BOOKMARK, TAB, IMAGE_INLINE}
 )
-INLINE_ATOMIC_TYPES = frozenset({FIELD, TAB})
+INLINE_ATOMIC_TYPES = frozenset({FIELD, TAB, IMAGE_INLINE})
 
 PAGE_NUMBER_POSITIONS = frozenset(
     {"top-right", "bottom-center", "bottom-right"}
@@ -62,6 +71,7 @@ MARK_ITALIC = "italic"
 MARK_UNDERLINE = "underline"
 MARK_STRIKETHROUGH = "strikethrough"
 MARK_HIGHLIGHT = "highlight"
+MARK_BACKGROUND_SHADING = "backgroundShading"
 MARK_COLOR = "color"
 MARK_FONT_FAMILY = "fontFamily"
 MARK_FONT_SIZE = "fontSize"
@@ -76,6 +86,7 @@ _VALID_MARK_TYPES = frozenset(
         MARK_UNDERLINE,
         MARK_STRIKETHROUGH,
         MARK_HIGHLIGHT,
+        MARK_BACKGROUND_SHADING,
         MARK_COLOR,
         MARK_FONT_FAMILY,
         MARK_FONT_SIZE,
@@ -87,6 +98,7 @@ _VALID_MARK_TYPES = frozenset(
 _MARKS_REQUIRING_VALUE = frozenset(
     {
         MARK_HIGHLIGHT,
+        MARK_BACKGROUND_SHADING,
         MARK_COLOR,
         MARK_FONT_FAMILY,
         MARK_FONT_SIZE,
@@ -94,7 +106,28 @@ _MARKS_REQUIRING_VALUE = frozenset(
         MARK_LINK,
     }
 )
-_SCRIPT_VALUES = frozenset({"superscript", "subscript"})
+_SCRIPT_VALUES = frozenset({"none", "superscript", "subscript"})
+_HIGHLIGHT_VALUES = frozenset(
+    {
+        "yellow",
+        "green",
+        "cyan",
+        "magenta",
+        "blue",
+        "red",
+        "darkBlue",
+        "darkCyan",
+        "darkGreen",
+        "darkMagenta",
+        "darkRed",
+        "darkYellow",
+        "darkGray",
+        "lightGray",
+        "black",
+        "white",
+        "none",
+    }
+)
 _TEXT_ALIGNMENTS = frozenset({"left", "center", "right", "justify"})
 _ORIENTATIONS = frozenset({"portrait", "landscape"})
 _auto_id = itertools.count(1)
@@ -149,6 +182,13 @@ def _validate_styles(styles: dict[str, Any]) -> None:
             f"'listLevel' must be a non-negative integer, got: {list_level!r}"
         )
 
+    highlight = styles.get("highlight")
+    if highlight is not None and highlight not in _HIGHLIGHT_VALUES:
+        raise DocumentBuildError(
+            f"'highlight' must be one of {sorted(_HIGHLIGHT_VALUES)}, "
+            f"got: {highlight!r}"
+        )
+
     for span in ("colSpan", "rowSpan"):
         if span in styles:
             _validate_span(span, styles[span])
@@ -193,6 +233,48 @@ class Mark:
         return cls(type=data["type"], value=data.get("value"))
 
 
+def _marks_to_style(marks: tuple[Mark, ...]) -> dict[str, Any]:
+    style: dict[str, Any] = {}
+    for mark in marks:
+        if mark.type == MARK_LINK:
+            continue
+        if (
+            mark.type == MARK_HIGHLIGHT
+            and isinstance(mark.value, str)
+            and mark.value.startswith("#")
+        ):
+            style[MARK_BACKGROUND_SHADING] = mark.value
+            continue
+        style[mark.type] = True if mark.value is None else mark.value
+    return style
+
+
+def _style_to_marks(style: Mapping[str, Any]) -> tuple[Mark, ...]:
+    marks: list[Mark] = []
+    for name, value in style.items():
+        if name not in _VALID_MARK_TYPES or name == MARK_LINK:
+            continue
+        if name in {
+            MARK_BOLD,
+            MARK_ITALIC,
+            MARK_UNDERLINE,
+            MARK_STRIKETHROUGH,
+            MARK_CODE,
+        }:
+            if value:
+                marks.append(Mark(name))
+            continue
+        if (
+            name == MARK_HIGHLIGHT
+            and isinstance(value, str)
+            and value.startswith("#")
+        ):
+            marks.append(Mark(MARK_BACKGROUND_SHADING, value))
+            continue
+        marks.append(Mark(name, value))
+    return tuple(marks)
+
+
 @dataclass(frozen=True)
 class DocumentNode:
     type: str | None = None
@@ -226,7 +308,7 @@ class DocumentNode:
         if is_leaf:
             self._validate_text_leaf()
             return
-        if self.type not in BLOCK_TYPES:
+        if self.type not in BLOCK_TYPES | {IMAGE_INLINE}:
             raise DocumentBuildError(f"Unknown node type: {self.type!r}")
         if self.marks:
             raise DocumentBuildError("Only leaf text nodes may carry 'marks'.")
@@ -260,13 +342,11 @@ class DocumentNode:
             )
 
     def _validate_block_payload(self) -> None:
-        if self.type == IMAGE:
+        if self.type in {IMAGE, IMAGE_INLINE}:
             if not self.src:
                 raise DocumentBuildError("An 'image' node requires 'src'.")
         elif self.src is not None or self.alt is not None:
-            raise DocumentBuildError(
-                "'src'/'alt' only apply to 'image' nodes."
-            )
+            raise DocumentBuildError("'src'/'alt' only apply to image nodes.")
 
         if self.caption is not None and self.type not in {IMAGE, TABLE}:
             raise DocumentBuildError(
@@ -364,7 +444,7 @@ class DocumentNode:
         if self.text is not None:
             result: dict[str, Any] = {"text": self.text}
             if self.marks:
-                result["marks"] = [mark.to_dict() for mark in self.marks]
+                result["style"] = _marks_to_style(self.marks)
             return result
 
         result = {"type": self.type}
@@ -373,7 +453,7 @@ class DocumentNode:
         if self.section_type:
             result["section_type"] = self.section_type
         if self.styles:
-            result["styles"] = dict(self.styles)
+            result["style"] = dict(self.styles)
         if self.src is not None:
             result["src"] = self.src
         if self.alt is not None:
@@ -389,7 +469,7 @@ class DocumentNode:
         if self.metadata:
             result["metadata"] = dict(self.metadata)
         if self.type not in ATOMIC_BLOCK_TYPES:
-            result["children"] = [child.to_dict() for child in self.children]
+            result["children"] = _children_to_dict(self.children)
         return result
 
     @classmethod
@@ -411,16 +491,23 @@ class DocumentNode:
             raw_marks = data.get("marks") or ()
             if not isinstance(raw_marks, (list, tuple)):
                 raise DocumentBuildError("'marks' must be a JSON array.")
+            style = data.get("style") or {}
+            if not isinstance(style, dict):
+                raise DocumentBuildError("'style' must be a JSON object.")
             return cls(
                 text=text,
-                marks=tuple(Mark.from_dict(mark) for mark in raw_marks),
+                marks=(
+                    _style_to_marks(style)
+                    if style
+                    else tuple(Mark.from_dict(mark) for mark in raw_marks)
+                ),
             )
 
-        styles = data.get("styles") or {}
+        styles = data.get("style") or data.get("styles") or {}
         metadata = data.get("metadata") or {}
         raw_children = data.get("children") or ()
         if not isinstance(styles, dict):
-            raise DocumentBuildError("'styles' must be a JSON object.")
+            raise DocumentBuildError("'style' must be a JSON object.")
         if not isinstance(metadata, dict):
             raise DocumentBuildError("'metadata' must be a JSON object.")
         if not isinstance(raw_children, (list, tuple)):
@@ -443,6 +530,55 @@ class DocumentNode:
             field_type=data.get("field_type", data.get("fieldType")),
             metadata=dict(metadata),
         )
+
+
+def _children_to_dict(
+    children: tuple[DocumentNode, ...],
+) -> list[dict[str, Any]]:
+    """Serialize legacy link marks as the single v2 hyperlink shape."""
+    result: list[dict[str, Any]] = []
+    index = 0
+    while index < len(children):
+        child = children[index]
+        link = next(
+            (mark for mark in child.marks if mark.type == MARK_LINK), None
+        )
+        if child.text is None or link is None:
+            result.append(child.to_dict())
+            index += 1
+            continue
+
+        link_value = link.value if isinstance(link.value, dict) else {}
+        url = link_value.get("url")
+        linked_children: list[dict[str, Any]] = []
+        while index < len(children):
+            candidate = children[index]
+            candidate_link = next(
+                (mark for mark in candidate.marks if mark.type == MARK_LINK),
+                None,
+            )
+            if (
+                candidate.text is None
+                or candidate_link is None
+                or candidate_link.value != link.value
+            ):
+                break
+            linked_children.append(candidate.to_dict())
+            index += 1
+        result.append(
+            {
+                "id": _next_id(),
+                "type": HYPERLINK,
+                "metadata": {
+                    key: value
+                    for key, value in link_value.items()
+                    if key != "url"
+                }
+                | {"url": url},
+                "children": linked_children,
+            }
+        )
+    return result
 
 
 _CELL_BLOCK_TYPES = (

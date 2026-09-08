@@ -34,6 +34,8 @@ from domain.value_objects.document_node import (
 from domain.value_objects.document_type import DocumentType
 from infrastructure.export.docx_document_exporter_adapter import (
     DocxDocumentExporterAdapter,
+    _build_styles,
+    _render_block,
 )
 from infrastructure.export.pdf_document_exporter_adapter import (
     PdfDocumentExporterAdapter,
@@ -54,6 +56,46 @@ class ExportTableOfContentsTest(unittest.TestCase):
         self.assertIn("Tema principal", _entry_titles(entries))
         self.assertTrue(all(page_number > 0 for _, _, page_number in entries))
         self.assertIn((1, "Tema principal"), _entry_levels(entries))
+
+    def test_docx_resolves_table_row_cell_and_paragraph_styles(self) -> None:
+        docx = ReadDocx()
+        logical_styles = _build_styles(docx, self.document.global_style)
+        table = DocumentNode(
+            type=TABLE,
+            styles={"fontFamily": "Arial", "color": "#112233"},
+            children=(
+                DocumentNode(
+                    type=TABLE_ROW,
+                    styles={"fontSize": "10pt"},
+                    children=(
+                        DocumentNode(
+                            type=TABLE_CELL,
+                            styles={"italic": True},
+                            children=(
+                                DocumentNode(
+                                    type=PARAGRAPH,
+                                    styles={"bold": True},
+                                    children=(text_node("Cascaded"),),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        _render_block(
+            docx,
+            table,
+            {"styles": logical_styles, "content_width_pt": 400},
+        )
+
+        run = docx.tables[0].cell(0, 0).paragraphs[0].runs[0]
+        self.assertEqual(run.font.name, "Arial")
+        self.assertEqual(str(run.font.color.rgb), "112233")
+        self.assertEqual(run.font.size.pt, 10)
+        self.assertTrue(run.font.italic)
+        self.assertTrue(run.font.bold)
 
     def test_docx_contains_visible_updateable_toc_on_first_render(
         self,
@@ -208,10 +250,12 @@ class ExportTableOfContentsTest(unittest.TestCase):
         self.assertTrue(
             any(node.type == TABLE_OF_CONTENTS for node in index.body_nodes)
         )
-        marks = parsed_introduction.body_nodes[0].children[0].marks
+        hyperlink = parsed_introduction.body_nodes[0].children[0]
+        self.assertEqual(hyperlink.type, "hyperlink")
+        self.assertEqual(hyperlink.metadata["url"], "https://example.com")
+        marks = hyperlink.children[0].marks
         self.assertIn(Mark(MARK_COLOR, "#FF0000"), marks)
-        self.assertIn(Mark(MARK_HIGHLIGHT, "#FFFF00"), marks)
-        self.assertIn(Mark(MARK_LINK, {"url": "https://example.com"}), marks)
+        self.assertIn(Mark(MARK_HIGHLIGHT, "yellow"), marks)
         self.assertEqual(
             parsed_introduction.body_nodes[0].styles["textAlign"], "right"
         )
@@ -297,7 +341,7 @@ class ExportTableOfContentsTest(unittest.TestCase):
         )
         parsed_table = body.body_nodes[1]
         self.assertEqual(parsed_table.type, TABLE)
-        self.assertEqual(parsed_table.styles["alignment"], "left")
+        self.assertEqual(parsed_table.styles["textAlign"], "left")
         self.assertEqual(
             parsed_table.styles["columnWidths"], ["120pt", "180pt"]
         )

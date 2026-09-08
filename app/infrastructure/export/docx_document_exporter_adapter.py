@@ -7,6 +7,9 @@ from urllib.request import urlopen
 
 from application.dtos.export_result import ExportResult
 from application.ports.document_exporter_port import DocumentExporterPort
+from application.services.document_tree_validation import (
+    validate_document_tree,
+)
 from docx import Document as DocxDocument
 from docx.enum.section import WD_ORIENT
 from docx.enum.table import WD_TABLE_ALIGNMENT
@@ -30,15 +33,18 @@ from domain.value_objects.apa_structure import (
 from domain.value_objects.document_node import (
     BLOCK_QUOTE,
     BULLETED_LIST,
+    FIELD,
     HEADING_1,
     HEADING_2,
     HEADING_3,
     HEADING_4,
     HEADING_5,
+    HYPERLINK,
     IMAGE,
     NUMBERED_LIST,
     PAGE_BREAK,
     PARAGRAPH,
+    TAB,
     TABLE,
     TABLE_OF_CONTENTS,
     DocumentNode,
@@ -92,6 +98,7 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
         )
 
     def _build_sync(self, document: Document) -> bytes:
+        validate_document_tree(document.to_node_tree())
         toc_entries = PdfDocumentExporterAdapter().build_toc_entries(document)
         doc_styles = normalize_document_styles(document.global_style)
         docx = DocxDocument()
@@ -610,28 +617,63 @@ def _add_field(paragraph, instruction: str, *, cached_text: str = "") -> None:
 # --- inline rendering (marks) ------------------------------------------
 
 
-def _render_inline(paragraph, nodes: tuple[DocumentNode, ...]) -> None:
+def _render_inline(
+    paragraph,
+    nodes: tuple[DocumentNode, ...],
+    inherited_styles: dict | None = None,
+) -> None:
     for node in nodes:
-        _render_leaf(paragraph, node)
+        if node.type == HYPERLINK:
+            url = str(node.metadata.get("url", ""))
+            for child in node.children:
+                _render_leaf(
+                    paragraph,
+                    child,
+                    hyperlink_url=url,
+                    inherited_styles=inherited_styles,
+                )
+            continue
+        if node.type == FIELD:
+            _add_field(paragraph, node.field_type or "")
+            continue
+        if node.type == TAB:
+            paragraph.add_run("\t")
+            continue
+        _render_leaf(
+            paragraph,
+            node,
+            inherited_styles=inherited_styles,
+        )
 
 
-def _render_leaf(paragraph, node: DocumentNode) -> None:
+def _render_leaf(
+    paragraph,
+    node: DocumentNode,
+    *,
+    hyperlink_url: str | None = None,
+    inherited_styles: dict | None = None,
+) -> None:
     if node.text is None:
         raise DocumentBuildError(
             f"Expected a leaf text node, got block '{node.type}'."
         )
-    by_type = {m.type: m.value for m in node.marks}
+    by_type = {
+        **(inherited_styles or {}),
+        **{m.type: True if m.value is None else m.value for m in node.marks},
+    }
 
-    if "link" in by_type:
+    if hyperlink_url:
+        run = _add_hyperlink(paragraph, node.text, hyperlink_url)
+    elif "link" in by_type:
         url = str(by_type["link"].get("url", ""))
         run = _add_hyperlink(paragraph, node.text, url)
     else:
         run = paragraph.add_run(node.text)
 
-    run.font.bold = "bold" in by_type or run.font.bold
-    run.font.italic = "italic" in by_type or run.font.italic
-    run.font.underline = "underline" in by_type or run.font.underline
-    run.font.strike = "strikethrough" in by_type or run.font.strike
+    run.font.bold = bool(by_type.get("bold")) or run.font.bold
+    run.font.italic = bool(by_type.get("italic")) or run.font.italic
+    run.font.underline = bool(by_type.get("underline")) or run.font.underline
+    run.font.strike = bool(by_type.get("strikethrough")) or run.font.strike
 
     if "code" in by_type:
         run.font.name = "Courier New"
@@ -650,6 +692,17 @@ def _render_leaf(paragraph, node: DocumentNode) -> None:
         run.font.superscript = by_type["script"] == "superscript"
     if "highlight" in by_type:
         run.font.highlight_color = _closest_highlight(by_type["highlight"])
+    if "backgroundShading" in by_type:
+        _shade_run(run, by_type["backgroundShading"])
+
+
+def _shade_run(run, hex_color) -> None:
+    run_properties = run._r.get_or_add_rPr()
+    shading = OxmlElement("w:shd")
+    shading.set(qn("w:val"), "clear")
+    shading.set(qn("w:color"), "auto")
+    shading.set(qn("w:fill"), str(hex_color).lstrip("#"))
+    run_properties.append(shading)
 
 
 def _add_hyperlink(paragraph, text: str, url: str):
@@ -683,6 +736,18 @@ def _add_hyperlink(paragraph, text: str, url: str):
 
 
 def _closest_highlight(hex_value) -> WD_COLOR_INDEX:
+    named = {
+        "yellow": WD_COLOR_INDEX.YELLOW,
+        "green": WD_COLOR_INDEX.BRIGHT_GREEN,
+        "cyan": WD_COLOR_INDEX.TURQUOISE,
+        "magenta": WD_COLOR_INDEX.PINK,
+        "red": WD_COLOR_INDEX.RED,
+        "blue": WD_COLOR_INDEX.BLUE,
+        "lightGray": WD_COLOR_INDEX.GRAY_25,
+        "none": WD_COLOR_INDEX.AUTO,
+    }
+    if hex_value in named:
+        return named[hex_value]
     target = _parse_color(hex_value, default=None)
     if target is None:
         return WD_COLOR_INDEX.YELLOW
@@ -699,12 +764,18 @@ def _closest_highlight(hex_value) -> WD_COLOR_INDEX:
 # --- block rendering ------------------------------------------------------
 
 
-def _render_block(container, node: DocumentNode, ctx: dict) -> None:
+def _render_block(
+    container,
+    node: DocumentNode,
+    ctx: dict,
+    inherited_styles: dict | None = None,
+) -> None:
     """`container` is anything exposing python-docx's `add_paragraph` /
     `add_table` — a `Document` or a table `_Cell` both qualify, which is
     what lets `_render_table` recurse into cells with this same function
     (mirrors the PDF adapter's `_render_block` reuse for table cells)."""
     styles = ctx["styles"]
+    resolved_styles = {**(inherited_styles or {}), **node.styles}
 
     if node.type == PAGE_BREAK:
         p = container.add_paragraph()
@@ -715,34 +786,36 @@ def _render_block(container, node: DocumentNode, ctx: dict) -> None:
         p = container.add_paragraph(
             style=styles[_HEADING_STYLE_NAMES[node.type]]
         )
-        _render_inline(p, node.children)
-        _apply_block_style(p, node.styles)
+        _render_inline(p, node.children, resolved_styles)
+        _apply_block_style(p, resolved_styles)
         return
 
     if node.type == PARAGRAPH:
         p = container.add_paragraph(style=styles["Body"])
-        _render_inline(p, node.children)
-        _apply_block_style(p, node.styles)
+        _render_inline(p, node.children, resolved_styles)
+        _apply_block_style(p, resolved_styles)
         return
 
     if node.type == BLOCK_QUOTE:
         p = container.add_paragraph(style=styles["BlockQuote"])
-        _render_inline(p, node.children)
-        _apply_block_style(p, node.styles)
+        _render_inline(p, node.children, resolved_styles)
+        _apply_block_style(p, resolved_styles)
         return
 
     if node.type == BULLETED_LIST:
         for item in node.children:
             p = container.add_paragraph(style=styles["Bullet"])
-            _render_inline(p, item.children)
-            _apply_block_style(p, node.styles)
+            item_styles = {**resolved_styles, **item.styles}
+            _render_inline(p, item.children, item_styles)
+            _apply_block_style(p, item_styles)
         return
 
     if node.type == NUMBERED_LIST:
         for item in node.children:
             p = container.add_paragraph(style=styles["Numbered"])
-            _render_inline(p, item.children)
-            _apply_block_style(p, node.styles)
+            item_styles = {**resolved_styles, **item.styles}
+            _render_inline(p, item.children, item_styles)
+            _apply_block_style(p, item_styles)
         return
 
     if node.type == IMAGE:
@@ -750,7 +823,7 @@ def _render_block(container, node: DocumentNode, ctx: dict) -> None:
         return
 
     if node.type == TABLE:
-        _render_table(container, node, ctx)
+        _render_table(container, node, ctx, inherited_styles or {})
         return
 
     raise DocumentBuildError(
@@ -832,7 +905,9 @@ def _render_image(container, node: DocumentNode, ctx: dict) -> None:
     content_width_pt = ctx["content_width_pt"]
 
     p = container.add_paragraph()
-    align = str(node.styles.get("alignment", "center")).lower()
+    align = str(
+        node.styles.get("textAlign", node.styles.get("alignment", "center"))
+    ).lower()
     p.alignment = _ALIGN_MAP.get(align, WD_ALIGN_PARAGRAPH.CENTER)
 
     try:
@@ -860,8 +935,14 @@ def _fetch_image_bytes(src: str | None) -> bytes:
         return response.read()
 
 
-def _render_table(container, node: DocumentNode, ctx: dict) -> None:
+def _render_table(
+    container,
+    node: DocumentNode,
+    ctx: dict,
+    inherited_styles: dict,
+) -> None:
     rows = node.children  # each is a TABLE_ROW node
+    table_cascade = {**inherited_styles, **node.styles}
     if not rows:
         raise DocumentBuildError("A 'table' node has no rows.")
 
@@ -895,7 +976,11 @@ def _render_table(container, node: DocumentNode, ctx: dict) -> None:
         "right": WD_TABLE_ALIGNMENT.RIGHT,
     }
     table.alignment = table_alignment.get(
-        str(node.styles.get("alignment", "center")).lower(),
+        str(
+            node.styles.get(
+                "textAlign", node.styles.get("alignment", "center")
+            )
+        ).lower(),
         WD_TABLE_ALIGNMENT.CENTER,
     )
     table.autofit = False
@@ -925,20 +1010,27 @@ def _render_table(container, node: DocumentNode, ctx: dict) -> None:
                 **ctx,
                 "content_width_pt": cell_width or column_widths[c],
             }
+            cell_cascade = {
+                **table_cascade,
+                **row.styles,
+                **cell_node.styles,
+            }
             # python-docx always gives a fresh cell one empty paragraph;
             # drop it once we're about to add real content so we don't
             # leave a blank line above every cell's text.
             cell.paragraphs[0].text = ""
             for child in cell_node.children:
                 paragraph_count = len(cell.paragraphs)
-                _render_block(cell, child, cell_ctx)
+                _render_block(cell, child, cell_ctx, cell_cascade)
                 if (
                     child.type == PARAGRAPH
                     and "textIndent" not in child.styles
                 ):
                     for paragraph in cell.paragraphs[paragraph_count:]:
                         paragraph.paragraph_format.first_line_indent = Pt(0)
-            if len(cell.paragraphs) > 1 and not cell.paragraphs[0].runs:
+            if len(cell.paragraphs) > 1 and not any(
+                run.text for run in cell.paragraphs[0].runs
+            ):
                 cell.paragraphs[0]._p.getparent().remove(cell.paragraphs[0]._p)
             cell_background = cell_node.styles.get(
                 "backgroundColor", table_background

@@ -51,6 +51,14 @@ class Document:
     global_style: dict[str, Any] = field(
         default_factory=lambda: dict(APA7_DOCUMENT_STYLES)
     )
+    numbering_definitions: dict[str, Any] = field(default_factory=dict)
+    headers_footers: dict[str, Any] = field(
+        default_factory=lambda: {
+            "default_header": {"children": []},
+            "default_footer": {"children": []},
+            "first_page_different": False,
+        }
+    )
 
     @classmethod
     def create(
@@ -202,8 +210,14 @@ class Document:
 
         return {
             "type": "document",
-            "meta": {"title": self.title, "style_guide": "APA7"},
+            "meta": {
+                "title": self.title,
+                "style_guide": "APA7",
+                "version": "2.0",
+            },
             "global_style": dict(self.global_style),
+            "numbering_definitions": dict(self.numbering_definitions),
+            "headers_footers": dict(self.headers_footers),
             "children": children,
         }
 

@@ -73,7 +73,6 @@ from api.schemas.documents import (
     CreateDocumentRequest,
     DeleteDocumentResponse,
     DocumentMetadataResponse,
-    DocumentPatchResponse,
     DocumentReferenceResponse,
     ExportDocumentResponse,
 )
@@ -258,14 +257,23 @@ async def augment_document(
     )
 
 
-@router.patch("/{document_id}", response_model=DocumentPatchResponse)
+@router.patch(
+    "/{document_id}",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "The parsed, persisted, and rebuilt DOCX.",
+            "content": {DOCX_MEDIA_TYPE: {}},
+        }
+    },
+)
 async def update_document(
     document_id: UUID,
     title: str | None = Form(default=None),
     document: UploadFile | None = File(default=None),
     current_user: User = Depends(get_current_user),
     use_case: UpdateDocumentUseCase = Depends(get_update_document_use_case),
-) -> DocumentPatchResponse:
+) -> StreamingResponse:
     if title is None and document is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -288,15 +296,7 @@ async def update_document(
     )
     result = await use_case.execute(data)
 
-    return DocumentPatchResponse(
-        id=str(result.id),
-        title=result.title,
-        document_type=result.document_type.value,
-        user_id=str(result.user_id),
-        error_message=result.error_message,
-        source_ids=[str(sid) for sid in result.source_ids],
-        updated_at=result.updated_at.isoformat(),
-    )
+    return _docx_response(result)
 
 
 @router.get("/list/{user_id}", response_model=list[DocumentReferenceResponse])

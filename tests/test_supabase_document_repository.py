@@ -51,8 +51,15 @@ class SupabaseDocumentRepositoryMappingTest(unittest.TestCase):
                 "meta": {
                     "title": "Schema mapping",
                     "style_guide": "APA7",
+                    "version": "2.0",
                 },
                 "global_style": APA7_DOCUMENT_STYLES,
+                "numbering_definitions": {},
+                "headers_footers": {
+                    "default_header": {"children": []},
+                    "default_footer": {"children": []},
+                    "first_page_different": False,
+                },
                 "children": [],
             },
         )

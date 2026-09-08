@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scriva.local/schemas/document-v2.json",
+  "title": "Scriva document tree v2",
+  "$ref": "#/$defs/document",
+  "$defs": {
+    "style": {
+      "type": "object",
+      "properties": {
+        "textAlign": {
+          "enum": ["left", "center", "right", "justify"]
+        },
+        "highlight": {
+          "enum": [
+            "yellow", "green", "cyan", "magenta", "blue", "red",
+            "darkBlue", "darkCyan", "darkGreen", "darkMagenta",
+            "darkRed", "darkYellow", "darkGray", "lightGray", "black",
+            "white", "none"
+          ]
+        },
+        "script": {
+          "enum": ["none", "superscript", "subscript"]
+        },
+        "fontSize": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?pt$"
+        },
+        "backgroundShading": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}$"
+        },
+        "lineHeight": {"type": "number"}
+      },
+      "additionalProperties": true
+    },
+    "text": {
+      "type": "object",
+      "required": ["text"],
+      "properties": {
+        "text": {"type": "string"},
+        "style": {"$ref": "#/$defs/style"}
+      },
+      "not": {"required": ["type"]},
+      "additionalProperties": false
+    },
+    "node": {
+      "oneOf": [
+        {"$ref": "#/$defs/text"},
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "id": {"type": "string", "minLength": 1},
+            "type": {
+              "enum": [
+                "heading-1", "heading-2", "heading-3", "heading-4",
+                "heading-5", "paragraph", "block-quote", "bulleted-list",
+                "numbered-list", "list-item", "table", "table-row",
+                "table-cell", "page-break", "section-break",
+                "table-of-contents", "image", "image-inline", "hyperlink",
+                "field", "tab", "footnote", "endnote", "bookmark"
+              ]
+            },
+            "section_type": {"type": "string"},
+            "style": {"$ref": "#/$defs/style"},
+            "children": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/node"}
+            },
+            "metadata": {"type": "object"},
+            "src": {"type": "string"},
+            "alt": {"type": "string"},
+            "caption": {"type": "string"},
+            "colSpan": {"type": "integer", "minimum": 1},
+            "rowSpan": {"type": "integer", "minimum": 1},
+            "field_type": {"type": "string"},
+            "numId": {"type": "string"}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "document": {
+      "type": "object",
+      "required": ["type", "meta", "global_style", "children"],
+      "properties": {
+        "type": {"const": "document"},
+        "meta": {
+          "type": "object",
+          "required": ["title", "style_guide", "version"],
+          "properties": {
+            "title": {"type": "string"},
+            "style_guide": {"type": "string"},
+            "author": {"type": "string"},
+            "version": {"const": "2.0"}
+          },
+          "additionalProperties": false
+        },
+        "global_style": {"$ref": "#/$defs/style"},
+        "numbering_definitions": {"type": "object"},
+        "headers_footers": {"type": "object"},
+        "children": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/node"}
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

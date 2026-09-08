@@ -4,7 +4,9 @@ from dataclasses import replace
 
 from domain.value_objects.apa_structure import APASection, APASectionType
 from domain.value_objects.document_node import (
+    HYPERLINK,
     LIST_TYPES,
+    MARK_LINK,
     PAGE_BREAK,
     TABLE_OF_CONTENTS,
     DocumentNode,
@@ -136,10 +138,10 @@ def _mark_spans(
     pieces: list[str] = []
     offset = 0
     for node in nodes:
-        for leaf in _leaves(node):
+        for leaf, inherited_marks in _leaves_with_context(node):
             assert leaf.text is not None
             end = offset + len(leaf.text)
-            spans.append((offset, end, leaf.marks))
+            spans.append((offset, end, (*leaf.marks, *inherited_marks)))
             pieces.append(leaf.text)
             offset = end
     return spans, "".join(pieces)
@@ -151,6 +153,30 @@ def _leaves(node: DocumentNode):
         return
     for child in node.children:
         yield from _leaves(child)
+
+
+def _leaves_with_context(
+    node: DocumentNode,
+    inherited_marks: tuple[Mark, ...] = (),
+):
+    if node.text is not None:
+        yield node, inherited_marks
+        return
+    marks = inherited_marks
+    if node.type == HYPERLINK and node.metadata.get("url"):
+        marks = (
+            *marks,
+            Mark(
+                MARK_LINK,
+                {
+                    key: value
+                    for key, value in node.metadata.items()
+                    if key in {"url", "tooltip"}
+                },
+            ),
+        )
+    for child in node.children:
+        yield from _leaves_with_context(child, marks)
 
 
 def _style_spans(

@@ -12,6 +12,9 @@ from application.dtos.document_dtos import DocumentReference
 from application.dtos.export_result import ExportResult
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.source_repository_port import SourceRepositoryPort
+from application.services.document_tree_validation import (
+    validate_document_tree,
+)
 from domain.entities.document import Document, DocumentStatus
 from domain.value_objects.apa_structure import (
     APA7_DOCUMENT_STYLES,
@@ -105,6 +108,8 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
         ).execute()
 
     def _to_row(self, document: Document) -> dict:
+        node_tree = document.to_node_tree()
+        validate_document_tree(node_tree)
         return {
             "id": str(document.id),
             "user_id": str(document.user_id),
@@ -112,7 +117,7 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             "document_type": document.document_type.value,
             "source_ids": [str(s.id) for s in document.raw_sources],
             "status": document.status.value,
-            "node_tree": document.to_node_tree(),
+            "node_tree": node_tree,
             "sources": [_to_jsonable(s) for s in document.sources],
             "created_at": document.created_at.isoformat(),
             "updated_at": document.updated_at.isoformat(),
@@ -132,6 +137,8 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             raw_sources.append(source)
 
         sections, global_style = _document_data_from_row(row)
+        node_tree = row.get("node_tree")
+        root = node_tree if isinstance(node_tree, dict) else {}
         return Document(
             id=UUID(row["id"]),
             user_id=UUID(row["user_id"]),
@@ -142,6 +149,17 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             sections=sections,
             sources=[SourceReference(**s) for s in row["sources"]],
             global_style=global_style,
+            numbering_definitions=dict(
+                root.get("numbering_definitions") or {}
+            ),
+            headers_footers=dict(
+                root.get("headers_footers")
+                or {
+                    "default_header": {"children": []},
+                    "default_footer": {"children": []},
+                    "first_page_different": False,
+                }
+            ),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             error_message=row.get("error_message"),
