@@ -28,6 +28,7 @@ from domain.value_objects.document_node import (
     TABLE_ROW,
     DocumentNode,
     Mark,
+    hyperlink_node,
     page_break_node,
     text_node,
 )
@@ -42,6 +43,9 @@ from infrastructure.export.pdf_document_exporter_adapter import (
 )
 from infrastructure.parsers.docx_document_parser_adapter import (
     DocxDocumentParserAdapter,
+)
+from infrastructure.persistence.supabase_document_repository import (
+    _sections_from_children,
 )
 
 
@@ -96,6 +100,38 @@ class ExportTableOfContentsTest(unittest.TestCase):
         self.assertEqual(run.font.size.pt, 10)
         self.assertTrue(run.font.italic)
         self.assertTrue(run.font.bold)
+
+    def test_docx_can_be_retrieved_after_persisting_v2_hyperlink(self) -> None:
+        introduction = self.document.get_section(APASectionType.INTRODUCTION)
+        assert introduction is not None
+        linked_paragraph = DocumentNode(
+            type=PARAGRAPH,
+            children=(
+                text_node("Read "),
+                hyperlink_node(
+                    (text_node("the source", marks=(Mark("bold"),)),),
+                    "https://example.com/source",
+                ),
+            ),
+        )
+        self.document.sections = [
+            replace(section, body_nodes=(linked_paragraph,))
+            if section.section_type is APASectionType.INTRODUCTION
+            else section
+            for section in self.document.sections
+        ]
+
+        persisted_tree = self.document.to_node_tree()
+        reloaded_sections = _sections_from_children(persisted_tree["children"])
+        self.document.sections = reloaded_sections
+
+        content = DocxDocumentExporterAdapter()._build_sync(self.document)
+
+        with ZipFile(BytesIO(content)) as archive:
+            relationships = archive.read(
+                "word/_rels/document.xml.rels"
+            ).decode()
+        self.assertIn("https://example.com/source", relationships)
 
     def test_docx_contains_visible_updateable_toc_on_first_render(
         self,

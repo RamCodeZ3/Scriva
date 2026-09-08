@@ -17,15 +17,18 @@ from domain.value_objects.apa_structure import (
 from domain.value_objects.document_node import (
     BLOCK_QUOTE,
     BULLETED_LIST,
+    FIELD,
     HEADING_1,
     HEADING_2,
     HEADING_3,
     HEADING_4,
     HEADING_5,
+    HYPERLINK,
     IMAGE,
     NUMBERED_LIST,
     PAGE_BREAK,
     PARAGRAPH,
+    TAB,
     TABLE,
     TABLE_OF_CONTENTS,
     DocumentNode,
@@ -562,9 +565,20 @@ _MARK_TAG_ORDER = (
 
 
 def _render_inline(nodes: tuple[DocumentNode, ...]) -> str:
-    """Render a sequence of leaf text nodes into ReportLab mini-markup,
-    honoring their marks (see module docstring for what isn't supported)."""
-    return "".join(_render_leaf(node) for node in nodes)
+    """Render inline v2 nodes into ReportLab mini-markup."""
+    rendered: list[str] = []
+    for node in nodes:
+        if node.type == HYPERLINK:
+            url = _xml_escape(str(node.metadata.get("url", "")))
+            children = _render_inline(node.children)
+            rendered.append(f'<link href="{url}">{children}</link>')
+        elif node.type == TAB:
+            rendered.append("&#9;")
+        elif node.type == FIELD:
+            rendered.append("")
+        else:
+            rendered.append(_render_leaf(node))
+    return "".join(rendered)
 
 
 def _render_leaf(node: DocumentNode) -> str:
