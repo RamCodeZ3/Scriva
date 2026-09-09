@@ -28,6 +28,7 @@ from domain.value_objects.document_node import (
     NUMBERED_LIST,
     PAGE_BREAK,
     PARAGRAPH,
+    SECTION_BREAK,
     TAB,
     TABLE,
     TABLE_OF_CONTENTS,
@@ -638,7 +639,7 @@ _HEADING_STYLE_NAMES = {
 def _render_block(
     node: DocumentNode, styles: dict, content_width: float
 ) -> list:
-    if node.type == PAGE_BREAK:
+    if node.type in {PAGE_BREAK, SECTION_BREAK}:
         return [PageBreak()]
 
     if node.type in _HEADING_STYLE_NAMES:
@@ -689,7 +690,13 @@ def _render_table(
         raise DocumentBuildError("A 'table' node has no rows.")
 
     n_cols = len(rows[0].children)
-    col_width = content_width / n_cols if n_cols else content_width
+    requested_widths = [cell.styles.get("width") for cell in rows[0].children]
+    column_widths = [
+        _parse_length(value, default=None) for value in requested_widths
+    ]
+    if any(width is None for width in column_widths):
+        col_width = content_width / n_cols if n_cols else content_width
+        column_widths = [col_width] * n_cols
 
     data: list[list] = []
     for row in rows:
@@ -700,14 +707,16 @@ def _render_table(
                 f"{len(row.children)})."
             )
         row_cells = []
-        for cell in row.children:  # each is a TABLE_CELL node
+        for cell_index, cell in enumerate(row.children):
             cell_flowables: list = []
             for child in cell.children:
-                cell_flowables += _render_block(child, styles, col_width)
+                cell_flowables += _render_block(
+                    child, styles, column_widths[cell_index]
+                )
             row_cells.append(cell_flowables)
         data.append(row_cells)
 
-    table = Table(data, colWidths=[col_width] * n_cols)
+    table = Table(data, colWidths=column_widths)
     commands = [
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("GRID", (0, 0), (-1, -1), 0.75, colors.black),
@@ -738,8 +747,8 @@ def _apply_block_style(
         value = _parse_length(node_styles["textIndent"], default=None)
         if value is not None:
             overrides["firstLineIndent"] = value
-    if "marginTop" in node_styles:
-        value = _parse_length(node_styles["marginTop"], default=None)
+    if "spaceBefore" in node_styles:
+        value = _parse_length(node_styles["spaceBefore"], default=None)
         if value is not None:
             overrides["spaceBefore"] = value
     if "marginBottom" in node_styles:

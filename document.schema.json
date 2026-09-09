@@ -30,6 +30,20 @@
           "pattern": "^#[0-9A-Fa-f]{6}$"
         },
         "lineHeight": {"type": "number"}
+        ,
+        "pageMargin": {
+          "type": "object",
+          "required": ["top", "right", "bottom", "left"],
+          "properties": {
+            "top": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)?(?:in|cm)$"},
+            "right": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)?(?:in|cm)$"},
+            "bottom": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)?(?:in|cm)$"},
+            "left": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)?(?:in|cm)$"}
+          },
+          "additionalProperties": false
+        },
+        "marginTop": false,
+        "columnWidths": false
       },
       "additionalProperties": true
     },
@@ -76,7 +90,41 @@
             "field_type": {"type": "string"},
             "numId": {"type": "string"}
           },
+          "allOf": [
+            {
+              "if": {"properties": {"type": {"const": "hyperlink"}}},
+              "then": {
+                "properties": {
+                  "children": {
+                    "items": {
+                      "not": {
+                        "properties": {"type": {"const": "hyperlink"}},
+                        "required": ["type"]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ],
           "additionalProperties": false
+        }
+      ]
+    },
+    "rootNode": {
+      "allOf": [
+        {"$ref": "#/$defs/node"},
+        {"required": ["id"]},
+        {
+          "if": {
+            "not": {
+              "properties": {
+                "type": {"enum": ["page-break", "section-break"]}
+              },
+              "required": ["type"]
+            }
+          },
+          "then": {"required": ["section_type"]}
         }
       ]
     },
@@ -101,7 +149,7 @@
         "headers_footers": {"type": "object"},
         "children": {
           "type": "array",
-          "items": {"$ref": "#/$defs/node"}
+          "items": {"$ref": "#/$defs/rootNode"}
         }
       },
       "additionalProperties": false

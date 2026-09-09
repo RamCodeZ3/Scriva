@@ -11,7 +11,7 @@ from application.services.document_tree_validation import (
     validate_document_tree,
 )
 from docx import Document as DocxDocument
-from docx.enum.section import WD_ORIENT
+from docx.enum.section import WD_ORIENT, WD_SECTION
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import (
     WD_ALIGN_PARAGRAPH,
@@ -44,6 +44,7 @@ from domain.value_objects.document_node import (
     NUMBERED_LIST,
     PAGE_BREAK,
     PARAGRAPH,
+    SECTION_BREAK,
     TAB,
     TABLE,
     TABLE_OF_CONTENTS,
@@ -782,6 +783,15 @@ def _render_block(
         p.add_run().add_break(WD_BREAK.PAGE)
         return
 
+    if node.type == SECTION_BREAK:
+        break_type = node.metadata.get("breakType", "next-page")
+        if break_type != "next-page" or not hasattr(container, "add_section"):
+            p = container.add_paragraph()
+            p.add_run().add_break(WD_BREAK.PAGE)
+        else:
+            container.add_section(WD_SECTION.NEW_PAGE)
+        return
+
     if node.type in _HEADING_STYLE_NAMES:
         p = container.add_paragraph(
             style=styles[_HEADING_STYLE_NAMES[node.type]]
@@ -844,8 +854,8 @@ def _apply_block_style(paragraph, node_styles: dict) -> None:
         value = _parse_length_pt(node_styles["textIndent"], default=None)
         if value is not None:
             pf.first_line_indent = Pt(value)
-    if "marginTop" in node_styles:
-        value = _parse_length_pt(node_styles["marginTop"], default=None)
+    if "spaceBefore" in node_styles:
+        value = _parse_length_pt(node_styles["spaceBefore"], default=None)
         if value is not None:
             pf.space_before = Pt(value)
     if "marginBottom" in node_styles:
@@ -948,18 +958,12 @@ def _render_table(
 
     n_cols = len(rows[0].children)
     content_width_pt = ctx["content_width_pt"]
-    requested_widths = node.styles.get("columnWidths", ())
-    if (
-        isinstance(requested_widths, (list, tuple))
-        and len(requested_widths) == n_cols
-    ):
-        column_widths = [
-            _resolve_dimension(value, content_width_pt, default=None)
-            for value in requested_widths
-        ]
-        if any(width is None for width in column_widths):
-            column_widths = []
-    else:
+    first_row_widths = [cell.styles.get("width") for cell in rows[0].children]
+    column_widths = [
+        _resolve_dimension(value, content_width_pt, default=None)
+        for value in first_row_widths
+    ]
+    if any(width is None for width in column_widths):
         column_widths = []
     if not column_widths:
         table_width = _resolve_dimension(

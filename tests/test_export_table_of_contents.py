@@ -30,6 +30,7 @@ from domain.value_objects.document_node import (
     Mark,
     hyperlink_node,
     page_break_node,
+    section_break_node,
     text_node,
 )
 from domain.value_objects.document_type import DocumentType
@@ -328,10 +329,7 @@ class ExportTableOfContentsTest(unittest.TestCase):
     def test_parser_preserves_heading_one_and_table_layout(self) -> None:
         table = DocumentNode(
             type=TABLE,
-            styles={
-                "alignment": "left",
-                "columnWidths": ["120pt", "180pt"],
-            },
+            styles={"textAlign": "left"},
             children=(
                 DocumentNode(
                     type=TABLE_ROW,
@@ -378,14 +376,45 @@ class ExportTableOfContentsTest(unittest.TestCase):
         parsed_table = body.body_nodes[1]
         self.assertEqual(parsed_table.type, TABLE)
         self.assertEqual(parsed_table.styles["textAlign"], "left")
+        self.assertNotIn("columnWidths", parsed_table.styles)
         self.assertEqual(
-            parsed_table.styles["columnWidths"], ["120pt", "180pt"]
+            [
+                cell.styles["width"]
+                for cell in parsed_table.children[0].children
+            ],
+            ["120pt", "180pt"],
         )
         parsed_row = parsed_table.children[0]
         self.assertEqual(parsed_row.styles["height"], "36pt")
         self.assertEqual(
             parsed_row.children[0].styles["backgroundColor"], "#00FF00"
         )
+
+    def test_docx_renders_break_nodes_without_section_type(self) -> None:
+        body = self.document.get_section(APASectionType.BODY)
+        assert body is not None
+        page_break = page_break_node()
+        section_break = section_break_node()
+        self.assertIsNotNone(page_break.id)
+        self.assertIsNotNone(section_break.id)
+        self.assertIsNone(page_break.section_type)
+        self.assertIsNone(section_break.section_type)
+        self.document.sections = [
+            replace(
+                section,
+                body_nodes=(page_break, section_break, *section.body_nodes),
+            )
+            if section.section_type is APASectionType.BODY
+            else section
+            for section in self.document.sections
+        ]
+
+        content = DocxDocumentExporterAdapter()._build_sync(self.document)
+
+        with ZipFile(BytesIO(content)) as archive:
+            document_xml = archive.read("word/document.xml").decode()
+        self.assertIn('w:type="page"', document_xml)
+        self.assertIn("w:sectPr", document_xml)
 
     def test_reference_text_can_be_edited_and_reexported(self) -> None:
         initial = DocxDocumentExporterAdapter()._build_sync(self.document)

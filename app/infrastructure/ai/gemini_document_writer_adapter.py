@@ -128,7 +128,7 @@ _NODE_SCHEMA_RULES = (
     "'list-item' -> \"left\". Only deviate from these defaults if the "
     "user's additional notes explicitly ask for different alignment on "
     "specific content. Besides 'textAlign', 'styles' may also carry "
-    "textIndent, marginTop/Bottom/Left/Right, lineHeight, "
+    "textIndent, spaceBefore, marginBottom/Left/Right, lineHeight, "
     "backgroundColor, borderLeft, etc. — but add those ONLY when the "
     "user's additional notes explicitly ask for that particular visual "
     "formatting.\n"

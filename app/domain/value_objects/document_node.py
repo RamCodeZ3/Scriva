@@ -150,6 +150,14 @@ def _validate_span(name: str, value: Any) -> None:
 
 def _validate_styles(styles: dict[str, Any]) -> None:
     """Validate known styles while retaining unknown OOXML properties."""
+    if "marginTop" in styles:
+        raise DocumentBuildError(
+            "'marginTop' is deprecated; use 'spaceBefore'."
+        )
+    if "columnWidths" in styles:
+        raise DocumentBuildError(
+            "'columnWidths' is not part of v2; use table-cell.style.width."
+        )
     text_align = styles.get("textAlign")
     if text_align is not None and text_align not in _TEXT_ALIGNMENTS:
         raise DocumentBuildError(
@@ -308,6 +316,8 @@ class DocumentNode:
         if is_leaf:
             self._validate_text_leaf()
             return
+        if self.id is None:
+            object.__setattr__(self, "id", _next_id())
         if self.type not in BLOCK_TYPES | {IMAGE_INLINE}:
             raise DocumentBuildError(f"Unknown node type: {self.type!r}")
         if self.marks:
@@ -513,11 +523,23 @@ class DocumentNode:
         if not isinstance(raw_children, (list, tuple)):
             raise DocumentBuildError("'children' must be a JSON array.")
 
+        if data.get("type") == HYPERLINK:
+            raw_children = _flatten_legacy_hyperlink_children(
+                metadata, raw_children
+            )
+
+        normalized_styles = dict(styles)
+        if "marginTop" in normalized_styles:
+            normalized_styles["spaceBefore"] = normalized_styles.pop(
+                "marginTop"
+            )
+        normalized_styles.pop("columnWidths", None)
+
         return cls(
             type=data.get("type"),
             id=data.get("id") or (_next_id() if assign_ids else None),
             section_type=data.get("section_type"),
-            styles=dict(styles),
+            styles=normalized_styles,
             children=tuple(
                 cls.from_dict(child, assign_ids=assign_ids)
                 for child in raw_children
@@ -530,6 +552,24 @@ class DocumentNode:
             field_type=data.get("field_type", data.get("fieldType")),
             metadata=dict(metadata),
         )
+
+
+def _flatten_legacy_hyperlink_children(
+    metadata: Mapping[str, Any], raw_children: Sequence[Any]
+) -> tuple[Any, ...]:
+    """Repair persisted duplicate hyperlinks while rejecting new ones."""
+    flattened: list[Any] = []
+    parent_url = metadata.get("url")
+    for child in raw_children:
+        if not isinstance(child, dict) or child.get("type") != HYPERLINK:
+            flattened.append(child)
+            continue
+        child_metadata = child.get("metadata") or {}
+        if child_metadata.get("url") != parent_url:
+            flattened.append(child)
+            continue
+        flattened.extend(child.get("children") or ())
+    return tuple(flattened)
 
 
 def _children_to_dict(

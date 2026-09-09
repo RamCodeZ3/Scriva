@@ -12,6 +12,12 @@ from domain.value_objects.apa_structure import (
     APA7_DOCUMENT_STYLES,
     APASection,
     APASectionType,
+    normalize_document_styles,
+)
+from domain.value_objects.document_node import (
+    PAGE_BREAK,
+    SECTION_BREAK,
+    DocumentNode,
 )
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.source_ref import SourceReference
@@ -205,8 +211,13 @@ class Document:
         """
         children: list[dict[str, Any]] = []
         for section in self.sections:
-            children.append(section.heading.to_dict())
-            children.extend(node.to_dict() for node in section.body_nodes)
+            children.append(
+                _root_node_dict(section.heading, section.section_type.value)
+            )
+            children.extend(
+                _root_node_dict(node, section.section_type.value)
+                for node in section.body_nodes
+            )
 
         return {
             "type": "document",
@@ -215,7 +226,7 @@ class Document:
                 "style_guide": "APA7",
                 "version": "2.0",
             },
-            "global_style": dict(self.global_style),
+            "global_style": normalize_document_styles(self.global_style),
             "numbering_definitions": dict(self.numbering_definitions),
             "headers_footers": dict(self.headers_footers),
             "children": children,
@@ -248,3 +259,12 @@ class Document:
 
     def _touch(self) -> None:
         self.updated_at = datetime.utcnow()
+
+
+def _root_node_dict(node: DocumentNode, section_type: str) -> dict[str, Any]:
+    data = node.to_dict()
+    if node.type in {PAGE_BREAK, SECTION_BREAK}:
+        data.pop("section_type", None)
+    else:
+        data["section_type"] = section_type
+    return data

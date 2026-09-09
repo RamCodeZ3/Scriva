@@ -363,13 +363,6 @@ def _table_styles(table) -> dict:
         value = str(alignment).split()[0].lower()
         if value in {"left", "center", "right"}:
             styles["textAlign"] = value
-    widths = [
-        f"{column.width.pt:g}pt"
-        for column in table.columns
-        if column.width is not None
-    ]
-    if len(widths) == len(table.columns):
-        styles["columnWidths"] = widths
     fills = table._tbl.xpath("./w:tblPr/w:shd/@w:fill")
     if fills and fills[0] not in {"auto", "nil"}:
         styles["backgroundColor"] = f"#{fills[0]}"
@@ -446,7 +439,7 @@ def _paragraph_styles(paragraph) -> dict[str, str | float]:
         "textIndent": paragraph_format.first_line_indent,
         "marginLeft": paragraph_format.left_indent,
         "marginRight": paragraph_format.right_indent,
-        "marginTop": paragraph_format.space_before,
+        "spaceBefore": paragraph_format.space_before,
         "marginBottom": paragraph_format.space_after,
     }
     for name, length in lengths.items():

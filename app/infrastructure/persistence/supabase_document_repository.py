@@ -21,7 +21,11 @@ from domain.value_objects.apa_structure import (
     APASection,
     APASectionType,
 )
-from domain.value_objects.document_node import DocumentNode
+from domain.value_objects.document_node import (
+    PAGE_BREAK,
+    SECTION_BREAK,
+    DocumentNode,
+)
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.source_ref import SourceReference
 from supabase import Client
@@ -276,7 +280,10 @@ def _sections_from_children(children: list) -> list[APASection]:
                 "Root content must start with a heading-1 that defines or "
                 "identifies its section."
             )
-        if node.section_type is None:
+        if node.section_type is None and node.type not in {
+            PAGE_BREAK,
+            SECTION_BREAK,
+        }:
             node = replace(node, section_type=current_section.value)
         grouped.setdefault(current_section, []).append(node)
 

@@ -38,7 +38,12 @@ APA7_DOCUMENT_STYLES: dict[str, Any] = {
     "fontSize": "12pt",
     "color": "#000000",
     "backgroundColor": "#ffffff",
-    "pageMargin": "1in",
+    "pageMargin": {
+        "top": "1in",
+        "right": "1in",
+        "bottom": "1in",
+        "left": "1in",
+    },
     "pageSize": "letter",
     "orientation": "portrait",
     "lineHeight": 2.0,
@@ -60,6 +65,11 @@ def normalize_document_styles(
         position = "top-right"
     merged["pageNumberPosition"] = position
     merged["showPageNumbers"] = bool(merged.get("showPageNumbers", True))
+    page_margin = merged.get("pageMargin")
+    if isinstance(page_margin, str):
+        merged["pageMargin"] = {
+            side: page_margin for side in ("top", "right", "bottom", "left")
+        }
     return merged
 
 

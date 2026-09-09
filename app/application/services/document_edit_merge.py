@@ -260,6 +260,13 @@ def _merge_node(
         incoming_styles = style_spans.get((start, offset, node.type), {})
         styles = {**node.styles, **incoming_styles}
         node_type = node.type
+        metadata = node.metadata
+        if node_type == HYPERLINK:
+            link_value = _link_value_for_range(spans, start, offset)
+            if link_value is None:
+                return children, offset
+            metadata = {**node.metadata, **link_value}
+            children = tuple(_without_link_marks(child) for child in children)
         if node_type in LIST_TYPES:
             incoming_types = {
                 incoming_type
@@ -274,6 +281,7 @@ def _merge_node(
                 type=node_type,
                 children=children,
                 styles=styles,
+                metadata=metadata,
             ),
         ), offset
     if not node.text:
@@ -300,3 +308,40 @@ def _merge_node(
         if cursor == end:
             break
     return tuple(pieces) or (node,), end
+
+
+def _link_value_for_range(
+    spans: list[tuple[int, int, tuple[Mark, ...]]],
+    start: int,
+    end: int,
+) -> dict | None:
+    link_value: dict | None = None
+    covered_until = start
+    for span_start, span_end, marks in spans:
+        overlap_start = max(start, span_start)
+        overlap_end = min(end, span_end)
+        if overlap_start >= overlap_end:
+            continue
+        link = next((mark for mark in marks if mark.type == MARK_LINK), None)
+        if link is None or not isinstance(link.value, dict):
+            return None
+        if link_value is None:
+            link_value = link.value
+        elif link.value != link_value:
+            return None
+        if overlap_start > covered_until:
+            return None
+        covered_until = max(covered_until, overlap_end)
+    return link_value if covered_until == end else None
+
+
+def _without_link_marks(node: DocumentNode) -> DocumentNode:
+    if node.text is not None:
+        return replace(
+            node,
+            marks=tuple(mark for mark in node.marks if mark.type != MARK_LINK),
+        )
+    return replace(
+        node,
+        children=tuple(_without_link_marks(child) for child in node.children),
+    )

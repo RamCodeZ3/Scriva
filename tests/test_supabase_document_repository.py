@@ -11,6 +11,7 @@ from domain.value_objects.apa_structure import (
 )
 from domain.value_objects.document_node import (
     HEADING_1,
+    PAGE_BREAK,
     PARAGRAPH,
     DocumentNode,
     text_node,
@@ -168,6 +169,7 @@ class SupabaseDocumentRepositoryMappingTest(unittest.TestCase):
                 node.section_type == section.section_type.value
                 for section in restored.sections
                 for node in section.nodes
+                if node.type != PAGE_BREAK
             )
         )
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from domain.exceptions import DocumentBuildError
 from domain.value_objects.document_node import (
     HYPERLINK,
     MARK_HIGHLIGHT,
@@ -9,6 +10,7 @@ from domain.value_objects.document_node import (
     PARAGRAPH,
     DocumentNode,
     Mark,
+    hyperlink_node,
 )
 
 
@@ -73,6 +75,57 @@ class DocumentNodeV2Test(unittest.TestCase):
             node.to_dict()["style"],
             {"backgroundShading": "#E8E8E8"},
         )
+
+    def test_rejects_nested_hyperlink(self) -> None:
+        inner = hyperlink_node(
+            (DocumentNode(text="nested"),), "https://example.com"
+        )
+
+        with self.assertRaises(DocumentBuildError):
+            hyperlink_node((inner,), "https://example.com")
+
+    def test_normalizes_deprecated_imported_styles(self) -> None:
+        node = DocumentNode.from_dict(
+            {
+                "type": PARAGRAPH,
+                "styles": {
+                    "marginTop": "7.5pt",
+                    "columnWidths": ["100pt"],
+                },
+                "children": [{"text": "Imported"}],
+            }
+        )
+
+        self.assertEqual(node.styles, {"spaceBefore": "7.5pt"})
+
+    def test_rejects_deprecated_styles_in_new_nodes(self) -> None:
+        with self.assertRaisesRegex(DocumentBuildError, "marginTop"):
+            DocumentNode(
+                type=PARAGRAPH,
+                styles={"marginTop": "7.5pt"},
+                children=(DocumentNode(text="Invalid"),),
+            )
+
+    def test_flattens_persisted_duplicate_hyperlink(self) -> None:
+        node = DocumentNode.from_dict(
+            {
+                "id": "node-202",
+                "type": HYPERLINK,
+                "metadata": {"url": "https://example.com"},
+                "children": [
+                    {
+                        "id": "node-8",
+                        "type": HYPERLINK,
+                        "metadata": {"url": "https://example.com"},
+                        "children": [{"text": "activity"}],
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(node.id, "node-202")
+        self.assertEqual(node.children[0].text, "activity")
+        self.assertEqual(len(node.children), 1)
 
 
 if __name__ == "__main__":
