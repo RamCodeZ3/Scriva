@@ -15,6 +15,7 @@ from domain.value_objects.document_node import (
     TABLE_OF_CONTENTS,
     DocumentNode,
     Mark,
+    hyperlink_node,
     page_break_node,
     text_node,
 )
@@ -105,6 +106,98 @@ class MergeDocxEditsTest(unittest.TestCase):
         merged = merge_docx_edits([original], [parsed])[0]
 
         self.assertEqual(merged.body_nodes, parsed.body_nodes)
+
+    def test_preserves_hyperlink_from_uploaded_docx_when_text_is_unchanged(
+        self,
+    ) -> None:
+        original = _section((_paragraph("Scriva"),))
+        parsed = _section(
+            (
+                DocumentNode(
+                    type=PARAGRAPH,
+                    children=(
+                        hyperlink_node(
+                            (text_node("Scriva"),),
+                            "https://example.com/edited",
+                        ),
+                    ),
+                ),
+            )
+        )
+
+        merged = merge_docx_edits([original], [parsed])[0]
+        serialized = merged.body_nodes[0].to_dict()
+
+        self.assertEqual(serialized["children"][0]["type"], "hyperlink")
+        self.assertEqual(
+            serialized["children"][0]["metadata"]["url"],
+            "https://example.com/edited",
+        )
+
+    def test_removes_hyperlink_when_editor_unlinks_unchanged_text(
+        self,
+    ) -> None:
+        original = _section(
+            (
+                DocumentNode(
+                    type=PARAGRAPH,
+                    children=(
+                        hyperlink_node(
+                            (text_node("Scriva"),),
+                            "https://example.com/original",
+                        ),
+                    ),
+                ),
+            )
+        )
+        parsed = _section((_paragraph("Scriva"),))
+
+        merged = merge_docx_edits([original], [parsed])[0]
+        serialized = merged.body_nodes[0].to_dict()
+
+        self.assertEqual(serialized["children"], [{"text": "Scriva"}])
+
+    def test_updates_existing_hyperlink_url_without_nesting(self) -> None:
+        original = _section(
+            (
+                DocumentNode(
+                    type=PARAGRAPH,
+                    children=(
+                        hyperlink_node(
+                            (text_node("Scriva"),),
+                            "https://example.com/original",
+                        ),
+                    ),
+                ),
+            )
+        )
+        parsed = _section(
+            (
+                DocumentNode(
+                    type=PARAGRAPH,
+                    children=(
+                        hyperlink_node(
+                            (text_node("Scriva"),),
+                            "https://example.com/updated",
+                        ),
+                    ),
+                ),
+            )
+        )
+
+        merged = merge_docx_edits([original], [parsed])[0]
+        serialized = merged.body_nodes[0].to_dict()
+
+        self.assertEqual(len(serialized["children"]), 1)
+        self.assertEqual(serialized["children"][0]["type"], "hyperlink")
+        self.assertEqual(
+            serialized["children"][0]["metadata"]["url"],
+            "https://example.com/updated",
+        )
+        self.assertEqual(
+            serialized["children"][0]["children"],
+            [{"text": "Scriva"}],
+        )
 
     def test_preserves_toc_structure_and_applies_index_styles(self) -> None:
         original = APASection(

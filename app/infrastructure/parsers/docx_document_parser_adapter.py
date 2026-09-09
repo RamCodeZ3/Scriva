@@ -16,11 +16,11 @@ from domain.value_objects.document_node import (
     HEADING_2,
     HEADING_3,
     LIST_ITEM,
+    MARK_BACKGROUND_SHADING,
     MARK_COLOR,
     MARK_FONT_FAMILY,
     MARK_FONT_SIZE,
     MARK_HIGHLIGHT,
-    MARK_LINK,
     MARK_SCRIPT,
     MARK_STRIKETHROUGH,
     NUMBERED_LIST,
@@ -32,17 +32,18 @@ from domain.value_objects.document_node import (
     TABLE_ROW,
     DocumentNode,
     Mark,
+    hyperlink_node,
 )
 
 _SECTION_ATTR = "{urn:scriva:document}section-type"
 _HIGHLIGHT_COLORS = {
-    WD_COLOR_INDEX.YELLOW: "#FFFF00",
-    WD_COLOR_INDEX.BRIGHT_GREEN: "#00FF00",
-    WD_COLOR_INDEX.TURQUOISE: "#00FFFF",
-    WD_COLOR_INDEX.PINK: "#FF00FF",
-    WD_COLOR_INDEX.RED: "#FF0000",
-    WD_COLOR_INDEX.BLUE: "#0000FF",
-    WD_COLOR_INDEX.GRAY_25: "#BFBFBF",
+    WD_COLOR_INDEX.YELLOW: "yellow",
+    WD_COLOR_INDEX.BRIGHT_GREEN: "green",
+    WD_COLOR_INDEX.TURQUOISE: "cyan",
+    WD_COLOR_INDEX.PINK: "magenta",
+    WD_COLOR_INDEX.RED: "red",
+    WD_COLOR_INDEX.BLUE: "blue",
+    WD_COLOR_INDEX.GRAY_25: "lightGray",
 }
 
 
@@ -246,14 +247,19 @@ def _runs(paragraph) -> list[DocumentNode]:
     nodes: list[DocumentNode] = []
     for item in paragraph.iter_inner_content():
         if isinstance(item, Hyperlink):
+            children: list[DocumentNode] = []
             for run in item.runs:
-                nodes.extend(_run_nodes(run, link_url=item.url))
+                children.extend(_run_nodes(run))
+            if children and item.url:
+                nodes.append(hyperlink_node(children, item.url))
+            else:
+                nodes.extend(children)
             continue
         nodes.extend(_run_nodes(item))
     return nodes or [DocumentNode(text=paragraph.text or " ")]
 
 
-def _run_nodes(run, *, link_url: str | None = None) -> list[DocumentNode]:
+def _run_nodes(run) -> list[DocumentNode]:
     if not run.text:
         return []
     marks: list[Mark] = []
@@ -271,6 +277,9 @@ def _run_nodes(run, *, link_url: str | None = None) -> list[DocumentNode]:
         color = _HIGHLIGHT_COLORS.get(run.font.highlight_color)
         if color is not None:
             marks.append(Mark(MARK_HIGHLIGHT, color))
+    shading = run._r.xpath("./w:rPr/w:shd/@w:fill")
+    if shading and shading[0] not in {"auto", "nil"}:
+        marks.append(Mark(MARK_BACKGROUND_SHADING, f"#{shading[0]}"))
     if run.font.name:
         marks.append(Mark(MARK_FONT_FAMILY, run.font.name))
     if run.font.size is not None:
@@ -279,8 +288,6 @@ def _run_nodes(run, *, link_url: str | None = None) -> list[DocumentNode]:
         marks.append(Mark(MARK_SCRIPT, "superscript"))
     elif run.font.subscript:
         marks.append(Mark(MARK_SCRIPT, "subscript"))
-    if link_url:
-        marks.append(Mark(MARK_LINK, {"url": link_url}))
     return [DocumentNode(text=run.text, marks=tuple(marks))]
 
 
@@ -355,14 +362,7 @@ def _table_styles(table) -> dict:
     if alignment is not None:
         value = str(alignment).split()[0].lower()
         if value in {"left", "center", "right"}:
-            styles["alignment"] = value
-    widths = [
-        f"{column.width.pt:g}pt"
-        for column in table.columns
-        if column.width is not None
-    ]
-    if len(widths) == len(table.columns):
-        styles["columnWidths"] = widths
+            styles["textAlign"] = value
     fills = table._tbl.xpath("./w:tblPr/w:shd/@w:fill")
     if fills and fills[0] not in {"auto", "nil"}:
         styles["backgroundColor"] = f"#{fills[0]}"
@@ -439,7 +439,7 @@ def _paragraph_styles(paragraph) -> dict[str, str | float]:
         "textIndent": paragraph_format.first_line_indent,
         "marginLeft": paragraph_format.left_indent,
         "marginRight": paragraph_format.right_indent,
-        "marginTop": paragraph_format.space_before,
+        "spaceBefore": paragraph_format.space_before,
         "marginBottom": paragraph_format.space_after,
     }
     for name, length in lengths.items():

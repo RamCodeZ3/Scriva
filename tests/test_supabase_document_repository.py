@@ -11,6 +11,7 @@ from domain.value_objects.apa_structure import (
 )
 from domain.value_objects.document_node import (
     HEADING_1,
+    PAGE_BREAK,
     PARAGRAPH,
     DocumentNode,
     text_node,
@@ -51,8 +52,15 @@ class SupabaseDocumentRepositoryMappingTest(unittest.TestCase):
                 "meta": {
                     "title": "Schema mapping",
                     "style_guide": "APA7",
+                    "version": "2.0",
                 },
                 "global_style": APA7_DOCUMENT_STYLES,
+                "numbering_definitions": {},
+                "headers_footers": {
+                    "default_header": {"children": []},
+                    "default_footer": {"children": []},
+                    "first_page_different": False,
+                },
                 "children": [],
             },
         )
@@ -161,6 +169,7 @@ class SupabaseDocumentRepositoryMappingTest(unittest.TestCase):
                 node.section_type == section.section_type.value
                 for section in restored.sections
                 for node in section.nodes
+                if node.type != PAGE_BREAK
             )
         )
 

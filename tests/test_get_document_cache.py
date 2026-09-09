@@ -78,7 +78,7 @@ class UpdateDocumentWriteThroughTest(unittest.IsolatedAsyncioTestCase):
             cache=self.cache,
         )
 
-        await use_case.execute(
+        result = await use_case.execute(
             UpdateDocumentInput(
                 document_id=self.document.id,
                 user_id=self.document.user_id,
@@ -94,6 +94,8 @@ class UpdateDocumentWriteThroughTest(unittest.IsolatedAsyncioTestCase):
             b"compiled-docx",
         )
         self.assertEqual(self.repository.saves, 1)
+        self.assertEqual(result.file_bytes, b"compiled-docx")
+        self.assertEqual(result.document.id, self.document.id)
 
     async def test_uses_cover_title_edited_inside_uploaded_docx(self) -> None:
         old_title = self.document.title

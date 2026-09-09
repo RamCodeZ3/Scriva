@@ -28,18 +28,25 @@ from domain.value_objects.document_node import (
     TABLE_ROW,
     DocumentNode,
     Mark,
+    hyperlink_node,
     page_break_node,
+    section_break_node,
     text_node,
 )
 from domain.value_objects.document_type import DocumentType
 from infrastructure.export.docx_document_exporter_adapter import (
     DocxDocumentExporterAdapter,
+    _build_styles,
+    _render_block,
 )
 from infrastructure.export.pdf_document_exporter_adapter import (
     PdfDocumentExporterAdapter,
 )
 from infrastructure.parsers.docx_document_parser_adapter import (
     DocxDocumentParserAdapter,
+)
+from infrastructure.persistence.supabase_document_repository import (
+    _sections_from_children,
 )
 
 
@@ -54,6 +61,78 @@ class ExportTableOfContentsTest(unittest.TestCase):
         self.assertIn("Tema principal", _entry_titles(entries))
         self.assertTrue(all(page_number > 0 for _, _, page_number in entries))
         self.assertIn((1, "Tema principal"), _entry_levels(entries))
+
+    def test_docx_resolves_table_row_cell_and_paragraph_styles(self) -> None:
+        docx = ReadDocx()
+        logical_styles = _build_styles(docx, self.document.global_style)
+        table = DocumentNode(
+            type=TABLE,
+            styles={"fontFamily": "Arial", "color": "#112233"},
+            children=(
+                DocumentNode(
+                    type=TABLE_ROW,
+                    styles={"fontSize": "10pt"},
+                    children=(
+                        DocumentNode(
+                            type=TABLE_CELL,
+                            styles={"italic": True},
+                            children=(
+                                DocumentNode(
+                                    type=PARAGRAPH,
+                                    styles={"bold": True},
+                                    children=(text_node("Cascaded"),),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        _render_block(
+            docx,
+            table,
+            {"styles": logical_styles, "content_width_pt": 400},
+        )
+
+        run = docx.tables[0].cell(0, 0).paragraphs[0].runs[0]
+        self.assertEqual(run.font.name, "Arial")
+        self.assertEqual(str(run.font.color.rgb), "112233")
+        self.assertEqual(run.font.size.pt, 10)
+        self.assertTrue(run.font.italic)
+        self.assertTrue(run.font.bold)
+
+    def test_docx_can_be_retrieved_after_persisting_v2_hyperlink(self) -> None:
+        introduction = self.document.get_section(APASectionType.INTRODUCTION)
+        assert introduction is not None
+        linked_paragraph = DocumentNode(
+            type=PARAGRAPH,
+            children=(
+                text_node("Read "),
+                hyperlink_node(
+                    (text_node("the source", marks=(Mark("bold"),)),),
+                    "https://example.com/source",
+                ),
+            ),
+        )
+        self.document.sections = [
+            replace(section, body_nodes=(linked_paragraph,))
+            if section.section_type is APASectionType.INTRODUCTION
+            else section
+            for section in self.document.sections
+        ]
+
+        persisted_tree = self.document.to_node_tree()
+        reloaded_sections = _sections_from_children(persisted_tree["children"])
+        self.document.sections = reloaded_sections
+
+        content = DocxDocumentExporterAdapter()._build_sync(self.document)
+
+        with ZipFile(BytesIO(content)) as archive:
+            relationships = archive.read(
+                "word/_rels/document.xml.rels"
+            ).decode()
+        self.assertIn("https://example.com/source", relationships)
 
     def test_docx_contains_visible_updateable_toc_on_first_render(
         self,
@@ -208,10 +287,12 @@ class ExportTableOfContentsTest(unittest.TestCase):
         self.assertTrue(
             any(node.type == TABLE_OF_CONTENTS for node in index.body_nodes)
         )
-        marks = parsed_introduction.body_nodes[0].children[0].marks
+        hyperlink = parsed_introduction.body_nodes[0].children[0]
+        self.assertEqual(hyperlink.type, "hyperlink")
+        self.assertEqual(hyperlink.metadata["url"], "https://example.com")
+        marks = hyperlink.children[0].marks
         self.assertIn(Mark(MARK_COLOR, "#FF0000"), marks)
-        self.assertIn(Mark(MARK_HIGHLIGHT, "#FFFF00"), marks)
-        self.assertIn(Mark(MARK_LINK, {"url": "https://example.com"}), marks)
+        self.assertIn(Mark(MARK_HIGHLIGHT, "yellow"), marks)
         self.assertEqual(
             parsed_introduction.body_nodes[0].styles["textAlign"], "right"
         )
@@ -248,10 +329,7 @@ class ExportTableOfContentsTest(unittest.TestCase):
     def test_parser_preserves_heading_one_and_table_layout(self) -> None:
         table = DocumentNode(
             type=TABLE,
-            styles={
-                "alignment": "left",
-                "columnWidths": ["120pt", "180pt"],
-            },
+            styles={"textAlign": "left"},
             children=(
                 DocumentNode(
                     type=TABLE_ROW,
@@ -297,15 +375,46 @@ class ExportTableOfContentsTest(unittest.TestCase):
         )
         parsed_table = body.body_nodes[1]
         self.assertEqual(parsed_table.type, TABLE)
-        self.assertEqual(parsed_table.styles["alignment"], "left")
+        self.assertEqual(parsed_table.styles["textAlign"], "left")
+        self.assertNotIn("columnWidths", parsed_table.styles)
         self.assertEqual(
-            parsed_table.styles["columnWidths"], ["120pt", "180pt"]
+            [
+                cell.styles["width"]
+                for cell in parsed_table.children[0].children
+            ],
+            ["120pt", "180pt"],
         )
         parsed_row = parsed_table.children[0]
         self.assertEqual(parsed_row.styles["height"], "36pt")
         self.assertEqual(
             parsed_row.children[0].styles["backgroundColor"], "#00FF00"
         )
+
+    def test_docx_renders_break_nodes_without_section_type(self) -> None:
+        body = self.document.get_section(APASectionType.BODY)
+        assert body is not None
+        page_break = page_break_node()
+        section_break = section_break_node()
+        self.assertIsNotNone(page_break.id)
+        self.assertIsNotNone(section_break.id)
+        self.assertIsNone(page_break.section_type)
+        self.assertIsNone(section_break.section_type)
+        self.document.sections = [
+            replace(
+                section,
+                body_nodes=(page_break, section_break, *section.body_nodes),
+            )
+            if section.section_type is APASectionType.BODY
+            else section
+            for section in self.document.sections
+        ]
+
+        content = DocxDocumentExporterAdapter()._build_sync(self.document)
+
+        with ZipFile(BytesIO(content)) as archive:
+            document_xml = archive.read("word/document.xml").decode()
+        self.assertIn('w:type="page"', document_xml)
+        self.assertIn("w:sectPr", document_xml)
 
     def test_reference_text_can_be_edited_and_reexported(self) -> None:
         initial = DocxDocumentExporterAdapter()._build_sync(self.document)
