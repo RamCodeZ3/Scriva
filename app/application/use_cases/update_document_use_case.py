@@ -1,9 +1,9 @@
 from domain.value_objects.apa_structure import APASectionType
 
 from application.dtos.document_dtos import (
-    DocumentOutput,
+    DocumentFileOutput,
     UpdateDocumentInput,
-    build_source_errors,
+    document_to_output,
 )
 from application.exceptions import (
     DocumentAccessDeniedError,
@@ -30,7 +30,7 @@ class UpdateDocumentUseCase:
         self._exporter = exporter
         self._cache = cache
 
-    async def execute(self, data: UpdateDocumentInput) -> DocumentOutput:
+    async def execute(self, data: UpdateDocumentInput) -> DocumentFileOutput:
         document = await self._documents.get_by_id(data.document_id)
         if document is None:
             raise DocumentNotFoundError(
@@ -63,7 +63,6 @@ class UpdateDocumentUseCase:
         document.update_content(
             title=title,
             sections=sections,
-            presentation=data.presentation,
         )
         await self._documents.save(document)
 
@@ -83,17 +82,13 @@ class UpdateDocumentUseCase:
             invalidate_existing=True,
         )
 
-        return DocumentOutput(
-            id=document.id,
-            title=document.title,
-            document_type=document.document_type,
-            status=document.status,
-            sections=document.sections,
-            user_id=document.user_id,
-            presentation=document.presentation,
-            error_message=document.error_message,
-            source_ids=[s.id for s in document.raw_sources],
-            source_errors=build_source_errors(document.raw_sources),
-            created_at=document.created_at,
-            updated_at=document.updated_at,
+        return DocumentFileOutput(
+            document=document_to_output(document),
+            file_bytes=docx_bytes,
+            file_name=exported.file_name or f"{document.title}.docx",
+            content_type=(
+                exported.content_type
+                or "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
         )

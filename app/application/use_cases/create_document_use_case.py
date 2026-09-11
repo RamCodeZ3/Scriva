@@ -1,11 +1,12 @@
-from domain.entities.document import Document
+from domain.entities.document import Document, DocumentStatus
 from domain.entities.source import Source
+from domain.exceptions import DocumentBuildError
 
 from application.dtos.document_dtos import (
     CreateDocumentInput,
     DocumentFileOutput,
-    DocumentOutput,
-    build_source_errors,
+    DocumentProgressCallback,
+    document_to_output,
 )
 from application.exceptions import UserNotFoundError
 from application.ports.document_exporter_port import DocumentExporterPort
@@ -36,7 +37,11 @@ class CreateDocumentUseCase:
         self._exporter = exporter
         self._cache = cache
 
-    async def execute(self, data: CreateDocumentInput) -> DocumentFileOutput:
+    async def execute(
+        self,
+        data: CreateDocumentInput,
+        on_progress: DocumentProgressCallback | None = None,
+    ) -> DocumentFileOutput:
         user = await self._users.get_by_id(data.user_id)
         if user is None:
             raise UserNotFoundError(f"User '{data.user_id}' does not exist.")
@@ -52,43 +57,48 @@ class CreateDocumentUseCase:
             title=data.title,
             document_type=data.document_type,
             raw_sources=raw_sources,
-            presentation=data.presentation,
-            additional_notes=data.additional_notes,
         )
         await self._documents.save(document)
 
         try:
-            await self._dispatcher.dispatch(document.id)
+            await self._dispatcher.dispatch(
+                document.id,
+                data.presentation,
+                data.additional_notes,
+                on_progress,
+            )
         except Exception:
             pass
 
         final_document = (
             await self._documents.get_by_id(document.id) or document
         )
+        if final_document.status == DocumentStatus.FAILED:
+            raise DocumentBuildError(
+                final_document.error_message or "Document generation failed."
+            )
 
-        metadata = DocumentOutput(
-            id=final_document.id,
-            title=final_document.title,
-            document_type=final_document.document_type,
-            status=final_document.status,
-            sections=final_document.sections,
-            user_id=final_document.user_id,
-            presentation=final_document.presentation,
-            error_message=final_document.error_message,
-            source_ids=[s.id for s in final_document.raw_sources],
-            source_errors=build_source_errors(final_document.raw_sources),
-            created_at=final_document.created_at,
-            updated_at=final_document.updated_at,
-        )
-        exported = await self._exporter.export(final_document)
-        if exported.file_bytes is None:
-            raise RuntimeError("The DOCX exporter returned no binary content.")
-        await cache_docx(
-            self._cache,
-            final_document,
-            exported.file_bytes,
-            invalidate_existing=True,
-        )
+        try:
+            metadata = document_to_output(final_document)
+            exported = await self._exporter.export(final_document)
+            if exported.file_bytes is None:
+                raise RuntimeError(
+                    "The DOCX exporter returned no binary content."
+                )
+            await cache_docx(
+                self._cache,
+                final_document,
+                exported.file_bytes,
+                invalidate_existing=True,
+            )
+            if on_progress is not None:
+                await on_progress(metadata)
+        except Exception as exc:
+            final_document.fail(str(exc), "document_export")
+            await self._documents.save(final_document)
+            if on_progress is not None:
+                await on_progress(document_to_output(final_document))
+            raise
         return DocumentFileOutput(
             document=metadata,
             file_bytes=exported.file_bytes,

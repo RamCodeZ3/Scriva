@@ -22,9 +22,21 @@ class WebExtractorAdapter(SourceExtractorPort):
     async def extract(self, raw: str) -> str:
         try:
             async with async_playwright() as pw:
-                browser = await pw.chromium.launch(headless=True)
+                browser = await pw.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--disable-images",
+                        "--blink-settings=imagesEnabled=false",
+                    ],
+                )
+
                 try:
                     page = await browser.new_page()
+
+                    await page.route("**/*.", lambda route: route.abort())
+
                     await page.goto(
                         raw,
                         timeout=self._timeout_ms,

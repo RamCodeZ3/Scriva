@@ -1,20 +1,26 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
-from uuid import UUID, uuid4
 from enum import Enum
 from typing import Any
+from uuid import UUID, uuid4
 
 from domain.entities.source import Source
-from domain.value_objects.document_type import DocumentType
+from domain.exceptions import DocumentBuildError
 from domain.value_objects.apa_structure import (
     APA7_DOCUMENT_STYLES,
     APASection,
     APASectionType,
+    normalize_document_styles,
 )
+from domain.value_objects.document_node import (
+    PAGE_BREAK,
+    SECTION_BREAK,
+    DocumentNode,
+)
+from domain.value_objects.document_type import DocumentType
 from domain.value_objects.source_ref import SourceReference
-from domain.value_objects.presentation_info import PresentationInfo
-from domain.exceptions import DocumentBuildError
 
 
 @dataclass(frozen=True)
@@ -28,6 +34,8 @@ class DocumentStatus(Enum):
     PENDING = "pending"
     EXTRACTING = "extracting"
     GENERATING = "generating"
+    EXPANDING = "expanding"
+    DRAFTING = "drafting"
     DONE = "done"
     FAILED = "failed"
 
@@ -39,16 +47,23 @@ class Document:
     title: str
     document_type: DocumentType
     raw_sources: list[Source]
-    presentation: PresentationInfo
     status: DocumentStatus
     sections: list[APASection]
     sources: list[SourceReference]
     created_at: datetime
     updated_at: datetime
     error_message: str | None = None
-    additional_notes: str | None = None
-    document_styles: dict[str, Any] = field(
+    error_stage: str | None = None
+    global_style: dict[str, Any] = field(
         default_factory=lambda: dict(APA7_DOCUMENT_STYLES)
+    )
+    numbering_definitions: dict[str, Any] = field(default_factory=dict)
+    headers_footers: dict[str, Any] = field(
+        default_factory=lambda: {
+            "default_header": {"children": []},
+            "default_footer": {"children": []},
+            "first_page_different": False,
+        }
     )
 
     @classmethod
@@ -58,8 +73,6 @@ class Document:
         title: str,
         document_type: DocumentType,
         raw_sources: list[Source],
-        presentation: PresentationInfo,
-        additional_notes: str | None = None,
     ) -> Document:
         if not raw_sources:
             raise DocumentBuildError("A document needs at least one source.")
@@ -71,13 +84,11 @@ class Document:
             title=title,
             document_type=document_type,
             raw_sources=raw_sources,
-            presentation=presentation,
             status=DocumentStatus.PENDING,
             sections=[],
             sources=[],
             created_at=now,
             updated_at=now,
-            additional_notes=additional_notes,
         )
 
     def start_extraction(self) -> None:
@@ -90,21 +101,39 @@ class Document:
         self.status = DocumentStatus.GENERATING
         self._touch()
 
+    def start_expansion(self) -> None:
+        self._assert_status(DocumentStatus.EXTRACTING)
+        self.status = DocumentStatus.EXPANDING
+        self._touch()
+
+    def start_drafting(self) -> None:
+        if self.status not in {
+            DocumentStatus.GENERATING,
+            DocumentStatus.EXPANDING,
+        }:
+            raise DocumentBuildError(
+                "Invalid operation: document is "
+                f"'{self.status.value}', expected 'generating' or "
+                "'expanding'."
+            )
+        self.status = DocumentStatus.DRAFTING
+        self._touch()
+
     def complete(
         self,
         title: str,
         sections: list[APASection],
         sources: list[SourceReference],
-        document_styles: dict[str, Any] | None = None,
+        global_style: dict[str, Any] | None = None,
     ) -> None:
-        self._assert_status(DocumentStatus.GENERATING)
+        self._assert_status(DocumentStatus.DRAFTING)
         self._validate_sections(sections)
 
         self.title = title
         self.sections = sorted(sections, key=lambda s: s.section_type.order)
         self.sources = sources
-        if document_styles is not None:
-            self.document_styles = document_styles
+        if global_style is not None:
+            self.global_style = global_style
         self.status = DocumentStatus.DONE
         self._touch()
 
@@ -112,8 +141,7 @@ class Document:
         self,
         title: str | None = None,
         sections: list[APASection] | None = None,
-        presentation: PresentationInfo | None = None,
-        document_styles: dict[str, Any] | None = None,
+        global_style: dict[str, Any] | None = None,
     ) -> None:
         if title is not None:
             self.title = title
@@ -121,10 +149,8 @@ class Document:
             self.sections = sorted(
                 sections, key=lambda s: s.section_type.order
             )
-        if presentation is not None:
-            self.presentation = presentation
-        if document_styles is not None:
-            self.document_styles = document_styles
+        if global_style is not None:
+            self.global_style = global_style
         self._touch()
 
     def augment(
@@ -134,21 +160,39 @@ class Document:
         sources: list[SourceReference],
         new_raw_sources: list[Source],
     ) -> None:
-        if self.status != DocumentStatus.DONE:
+        if self.status != DocumentStatus.DRAFTING:
             raise DocumentBuildError(
-                f"Cannot add info to a document in '{self.status.value}' status; "
-                "it must be 'done'."
+                "Cannot add info to a document in "
+                f"'{self.status.value}' status; "
+                "it must be 'drafting'."
             )
         self._validate_sections(sections)
         self.title = title
         self.sections = sorted(sections, key=lambda s: s.section_type.order)
         self.sources = sources
-        self.raw_sources = self.raw_sources + new_raw_sources
+        existing_ids = {source.id for source in self.raw_sources}
+        self.raw_sources.extend(
+            source
+            for source in new_raw_sources
+            if source.id not in existing_ids
+        )
+        self.status = DocumentStatus.DONE
+        self.error_message = None
+        self.error_stage = None
         self._touch()
 
-    def fail(self, reason: str) -> None:
+    def start_augmentation(self, new_raw_sources: list[Source]) -> None:
+        self._assert_status(DocumentStatus.DONE)
+        self.raw_sources.extend(new_raw_sources)
+        self.status = DocumentStatus.EXTRACTING
+        self.error_message = None
+        self.error_stage = None
+        self._touch()
+
+    def fail(self, reason: str, stage: str | None = None) -> None:
         self.status = DocumentStatus.FAILED
         self.error_message = reason
+        self.error_stage = stage
         self._touch()
 
     def is_ready(self) -> bool:
@@ -160,17 +204,31 @@ class Document:
         )
 
     def to_node_tree(self) -> dict[str, Any]:
-        """Serialize the whole document as a single ProseMirror-like tree:
-        `{meta, document_styles, children}`. This is the shape a node-based
-        renderer/editor (and the API layer) should consume directly."""
+        """Serialize the complete document as its canonical node tree.
+
+        Global styles are root metadata and never content children. A block's
+        ``styles`` and a text leaf's ``marks`` remain local overrides.
+        """
         children: list[dict[str, Any]] = []
         for section in self.sections:
-            children.append(section.heading.to_dict())
-            children.extend(node.to_dict() for node in section.body_nodes)
+            children.append(
+                _root_node_dict(section.heading, section.section_type.value)
+            )
+            children.extend(
+                _root_node_dict(node, section.section_type.value)
+                for node in section.body_nodes
+            )
 
         return {
-            "meta": {"title": self.title, "style_guide": "APA7"},
-            "document_styles": dict(self.document_styles),
+            "type": "document",
+            "meta": {
+                "title": self.title,
+                "style_guide": "APA7",
+                "version": "2.0",
+            },
+            "global_style": normalize_document_styles(self.global_style),
+            "numbering_definitions": dict(self.numbering_definitions),
+            "headers_footers": dict(self.headers_footers),
             "children": children,
         }
 
@@ -195,8 +253,18 @@ class Document:
     def _assert_status(self, expected: DocumentStatus) -> None:
         if self.status != expected:
             raise DocumentBuildError(
-                f"Invalid operation: document is '{self.status.value}', expected '{expected.value}'."
+                f"Invalid operation: document is '{self.status.value}', "
+                f"expected '{expected.value}'."
             )
 
     def _touch(self) -> None:
         self.updated_at = datetime.utcnow()
+
+
+def _root_node_dict(node: DocumentNode, section_type: str) -> dict[str, Any]:
+    data = node.to_dict()
+    if node.type in {PAGE_BREAK, SECTION_BREAK}:
+        data.pop("section_type", None)
+    else:
+        data["section_type"] = section_type
+    return data

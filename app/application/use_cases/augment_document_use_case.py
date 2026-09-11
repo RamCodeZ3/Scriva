@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from domain.entities.document import DocumentStatus
+from domain.entities.document import Document, DocumentStatus
 from domain.entities.source import Source
 from domain.exceptions import DocumentBuildError
 from domain.value_objects.apa_structure import APASectionType
@@ -8,8 +8,8 @@ from domain.value_objects.apa_structure import APASectionType
 from application.dtos.document_dtos import (
     AugmentDocumentInput,
     DocumentFileOutput,
-    DocumentOutput,
-    build_source_errors,
+    DocumentProgressCallback,
+    document_to_output,
 )
 from application.exceptions import (
     DocumentAccessDeniedError,
@@ -42,7 +42,11 @@ class AugmentDocumentUseCase:
         self._exporter = exporter
         self._cache = cache
 
-    async def execute(self, data: AugmentDocumentInput) -> DocumentFileOutput:
+    async def execute(
+        self,
+        data: AugmentDocumentInput,
+        on_progress: DocumentProgressCallback | None = None,
+    ) -> DocumentFileOutput:
         document = await self._documents.get_by_id(data.document_id)
         if document is None:
             raise DocumentNotFoundError(
@@ -63,79 +67,105 @@ class AugmentDocumentUseCase:
         new_sources = [
             Source.create_auto(raw, data.user_id) for raw in data.sources
         ]
-        extracted_sources = await self._extract_sources(new_sources)
+        error_stage = "source_extraction"
+        try:
+            for source in new_sources:
+                await self._sources.save(source)
+            document.start_augmentation(new_sources)
+            await self._documents.save(document)
+            await self._report(document, on_progress)
 
-        if not extracted_sources:
-            # Nothing usable came out of this batch: don't touch the
-            # document at all, just surface the aggregated failure.
-            raise NoSourcesExtractedError(
-                "None of the new sources could be extracted; "
-                "nothing was added to the document."
+            extracted_sources = await self._extract_sources(new_sources)
+            if not extracted_sources:
+                raise NoSourcesExtractedError(
+                    "None of the new sources could be extracted; "
+                    "nothing was added to the document."
+                )
+
+            document.start_expansion()
+            await self._documents.save(document)
+            await self._report(document, on_progress)
+
+            new_content = "\n\n".join(
+                f"[Fuente nueva {i + 1}]\n{s.get_content()}"
+                for i, s in enumerate(extracted_sources)
+            )
+            error_stage = "ai_expansion"
+            (
+                title,
+                sections,
+                references,
+                global_style,
+            ) = await self._writer.augment(
+                existing_sections=document.sections,
+                existing_references=document.sources,
+                new_content=new_content,
+                document_type=document.document_type,
+                existing_global_style=document.global_style,
+                additional_notes=data.additional_notes,
             )
 
-        new_content = "\n\n".join(
-            f"[Fuente nueva {i + 1}]\n{s.get_content()}"
-            for i, s in enumerate(extracted_sources)
-        )
+            error_stage = "document_drafting"
+            original_cover = document.get_section(APASectionType.PRESENTATION)
+            if original_cover is not None:
+                sections = [original_cover] + [
+                    section
+                    for section in sections
+                    if section.section_type is not APASectionType.PRESENTATION
+                ]
 
-        title, sections, references = await self._writer.augment(
-            existing_sections=document.sections,
-            existing_references=document.sources,
-            new_content=new_content,
-            document_type=document.document_type,
-            additional_notes=data.additional_notes,
-        )
+            document.start_drafting()
+            await self._documents.save(document)
+            await self._report(document, on_progress)
+            document.augment(
+                title=title,
+                sections=sections,
+                sources=references,
+                new_raw_sources=new_sources,
+            )
+            document.update_content(
+                global_style={**document.global_style, **global_style}
+            )
+            await self._documents.save(document)
+        except Exception as exc:
+            document.fail(str(exc), error_stage)
+            await self._documents.save(document)
+            await self._report(document, on_progress)
+            raise
 
-        # The cover is editable document content. Augmentation may update the
-        # other sections, but it must never regenerate the user's cover from
-        # metadata captured during initial creation.
-        original_cover = document.get_section(APASectionType.PRESENTATION)
-        if original_cover is not None:
-            sections = [original_cover] + [
-                section
-                for section in sections
-                if section.section_type is not APASectionType.PRESENTATION
-            ]
-
-        document.augment(
-            title=title,
-            sections=sections,
-            sources=references,
-            # Keep ALL new sources (including the failed ones) so they
-            # show up in raw_sources -> sources_error for the caller.
-            new_raw_sources=new_sources,
-        )
-        await self._documents.save(document)
-
-        metadata = DocumentOutput(
-            id=document.id,
-            title=document.title,
-            document_type=document.document_type,
-            status=document.status,
-            sections=document.sections,
-            user_id=document.user_id,
-            presentation=document.presentation,
-            error_message=document.error_message,
-            source_ids=[s.id for s in document.raw_sources],
-            source_errors=build_source_errors(document.raw_sources),
-            created_at=document.created_at,
-            updated_at=document.updated_at,
-        )
-        exported = await self._exporter.export(document)
-        if exported.file_bytes is None:
-            raise RuntimeError("The DOCX exporter returned no binary content.")
-        await cache_docx(
-            self._cache,
-            document,
-            exported.file_bytes,
-            invalidate_existing=True,
-        )
+        try:
+            metadata = document_to_output(document)
+            exported = await self._exporter.export(document)
+            if exported.file_bytes is None:
+                raise RuntimeError(
+                    "The DOCX exporter returned no binary content."
+                )
+            await cache_docx(
+                self._cache,
+                document,
+                exported.file_bytes,
+                invalidate_existing=True,
+            )
+            await self._report(document, on_progress)
+        except Exception as exc:
+            document.fail(str(exc), "document_export")
+            await self._documents.save(document)
+            await self._report(document, on_progress)
+            raise
         return DocumentFileOutput(
             document=metadata,
             file_bytes=exported.file_bytes,
             file_name=exported.file_name or f"{document.id}.docx",
             content_type=exported.content_type or "application/octet-stream",
         )
+
+    @staticmethod
+    async def _report(
+        document: Document,
+        on_progress: DocumentProgressCallback | None,
+    ) -> None:
+        if on_progress is not None:
+            await on_progress(document_to_output(document))
 
     async def _extract_sources(self, sources: list[Source]) -> list[Source]:
         extracted: list[Source] = []

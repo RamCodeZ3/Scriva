@@ -35,6 +35,21 @@ Turn raw, unstructured source material into a fully structured, properly cited d
 - **DiskCache** — Stores compiled DOCX binaries on local disk with content-addressed keys and LRU eviction.
 - **reportlab** — Generates PDF output for the final documents.
 - **youtube-transcript-api** — Retrieves transcripts from YouTube videos as a source input.
+- **OpenAI Whisper** — Transcribes local audio and video files supported by FFmpeg.
+
+Whisper uses the multilingual `base` model by default. Set `WHISPER_MODEL` to
+another installed model name or `WHISPER_DEVICE` to `cpu` or `cuda` when an
+explicit runtime device is required. FFmpeg must be available on `PATH`.
+
+Document creation and AI augmentation continue to accept their existing JSON
+bodies. To include local files, send `multipart/form-data` with `payload`
+containing that same JSON object and repeat the `files` field for every
+upload. `sources` may be empty when at least one file is present, and files
+may be omitted when `sources` contains at least one item. Uploaded files
+exist only in an isolated temporary directory while the
+document stream is running. Linux uses memory-backed `/dev/shm` when
+available; other environments use their system temporary directory. Files are
+removed when the stream finishes or is cancelled.
 
 ## Supported Output Formats
 
@@ -44,6 +59,20 @@ Turn raw, unstructured source material into a fully structured, properly cited d
 - Executive report
 - Study guide
 - Quiz / Exam
+
+## Progressive Document Responses
+
+`POST /api/v1/documents/` and
+`PATCH /api/v1/documents/ai/{document_id}` return `multipart/mixed` streams.
+Each stream contains progressive `application/json` metadata parts followed,
+after the `done` event, by the generated DOCX part. Creation reports
+`extracting`, `generating`, `drafting`, and `done`; AI augmentation reports
+`extracting`, `expanding`, `drafting`, and `done`.
+
+Failed sources appear in `sources_errors` without stopping processing when at
+least one source succeeded. A fatal error ends the stream with `status` set to
+`failed`, its cause in `error_message`, and the failing pipeline stage in
+`error_stage`; no DOCX part follows that event.
 
 ## Status
 

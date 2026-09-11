@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
-from domain.entities.document import DocumentStatus
+from domain.entities.document import Document, DocumentStatus
 from domain.entities.source import Source, SourceStatus
 from domain.value_objects.apa_structure import APASection
 from domain.value_objects.document_type import DocumentType
@@ -61,12 +62,32 @@ class DocumentOutput:
     status: DocumentStatus
     sections: list[APASection]
     user_id: UUID
-    presentation: PresentationInfo
     error_message: str | None
     source_ids: list[UUID]
     created_at: datetime
     updated_at: datetime
     source_errors: list[SourceErrorOutput] = field(default_factory=list)
+    error_stage: str | None = None
+
+
+DocumentProgressCallback = Callable[[DocumentOutput], Awaitable[None]]
+
+
+def document_to_output(document: Document) -> DocumentOutput:
+    return DocumentOutput(
+        id=document.id,
+        title=document.title,
+        document_type=document.document_type,
+        status=document.status,
+        sections=document.sections,
+        user_id=document.user_id,
+        error_message=document.error_message,
+        error_stage=document.error_stage,
+        source_ids=[source.id for source in document.raw_sources],
+        source_errors=build_source_errors(document.raw_sources),
+        created_at=document.created_at,
+        updated_at=document.updated_at,
+    )
 
 
 @dataclass(frozen=True)
@@ -83,7 +104,6 @@ class UpdateDocumentInput:
     user_id: UUID
     title: str | None = None
     sections: list[APASection] | None = None
-    presentation: PresentationInfo | None = None
     docx_bytes: bytes | None = None
 
 

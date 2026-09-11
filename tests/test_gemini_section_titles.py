@@ -39,6 +39,17 @@ class GeminiSectionTitleTest(unittest.TestCase):
 
         self.assertEqual(section.title, "Inteligencia artificial y sociedad")
 
+    def test_uses_document_title_for_presentation_heading(self) -> None:
+        raw = _raw_introduction("Presentación")
+        raw["section_type"] = "presentation"
+
+        section = self.adapter._build_section(
+            raw,
+            introduction_fallback="Inteligencia artificial y sociedad",
+        )
+
+        self.assertEqual(section.title, "Inteligencia artificial y sociedad")
+
     def test_rejects_generic_title_without_specific_fallback(self) -> None:
         with self.assertRaises(DocumentBuildError):
             self.adapter._build_section(
