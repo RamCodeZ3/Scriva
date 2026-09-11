@@ -42,6 +42,12 @@ from infrastructure.export.docx_document_exporter_adapter import (
 from infrastructure.export.pdf_document_exporter_adapter import (
     PdfDocumentExporterAdapter,
 )
+from infrastructure.export.pdf_document_exporter_adapter import (
+    _build_styles as _build_pdf_styles,
+)
+from infrastructure.export.pdf_document_exporter_adapter import (
+    _render_block as _render_pdf_block,
+)
 from infrastructure.parsers.docx_document_parser_adapter import (
     DocxDocumentParserAdapter,
 )
@@ -101,6 +107,61 @@ class ExportTableOfContentsTest(unittest.TestCase):
         self.assertEqual(run.font.size.pt, 10)
         self.assertTrue(run.font.italic)
         self.assertTrue(run.font.bold)
+
+    def test_pdf_applies_block_and_inline_styles_with_docx_parity(
+        self,
+    ) -> None:
+        styles = _build_pdf_styles(self.document.global_style)
+        heading = DocumentNode(
+            type=HEADING_1,
+            styles={
+                "textAlign": "left",
+                "fontSize": "24pt",
+                "color": "#112233",
+            },
+            children=(
+                text_node("Large "),
+                text_node(
+                    "inline",
+                    marks=(Mark("fontSize", "36pt"), Mark("bold")),
+                ),
+            ),
+        )
+
+        paragraph = _render_pdf_block(heading, styles, 468)[0]
+
+        self.assertEqual(paragraph.style.fontSize, 24)
+        self.assertEqual(paragraph.style.leading, 48)
+        self.assertEqual(paragraph.style.autoLeading, "max")
+        self.assertEqual(paragraph.style.alignment, 0)
+        self.assertEqual(paragraph.style.textColor.hexval(), "0x112233")
+        self.assertIn('size="36"', paragraph.text)
+        self.assertIn("<b><font", paragraph.text)
+        self.assertIn("inline</font></b>", paragraph.text)
+
+    def test_pdf_removes_body_indent_inside_table_cells(self) -> None:
+        styles = _build_pdf_styles(self.document.global_style)
+        table = DocumentNode(
+            type=TABLE,
+            children=(
+                DocumentNode(
+                    type=TABLE_ROW,
+                    children=(
+                        DocumentNode(
+                            type=TABLE_CELL,
+                            styles={"width": "100%"},
+                            children=(_block(PARAGRAPH, "Cell content"),),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        rendered = _render_pdf_block(table, styles, 468)[0]
+        cell_paragraph = rendered._cellvalues[0][0][0]
+
+        self.assertEqual(rendered._colWidths, [468])
+        self.assertEqual(cell_paragraph.style.firstLineIndent, 0)
 
     def test_docx_can_be_retrieved_after_persisting_v2_hyperlink(self) -> None:
         introduction = self.document.get_section(APASectionType.INTRODUCTION)
