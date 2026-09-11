@@ -137,6 +137,32 @@ class ExportTableOfContentsTest(unittest.TestCase):
     def test_docx_contains_visible_updateable_toc_on_first_render(
         self,
     ) -> None:
+        body = self.document.get_section(APASectionType.BODY)
+        index = self.document.get_section(APASectionType.INDEX)
+        assert body is not None
+        assert index is not None
+        self.document.sections = [
+            replace(
+                section,
+                body_nodes=(
+                    _block(HEADING_1, "Primer tema"),
+                    *section.body_nodes,
+                ),
+            )
+            if section.section_type is APASectionType.BODY
+            else replace(
+                section,
+                body_nodes=tuple(
+                    replace(node, styles={"marginLeft": "12pt"})
+                    if node.type == TABLE_OF_CONTENTS
+                    else node
+                    for node in section.body_nodes
+                ),
+            )
+            if section.section_type is APASectionType.INDEX
+            else section
+            for section in self.document.sections
+        ]
         content = DocxDocumentExporterAdapter()._build_sync(self.document)
 
         with ZipFile(BytesIO(content)) as archive:
@@ -152,7 +178,17 @@ class ExportTableOfContentsTest(unittest.TestCase):
             paragraph.text for paragraph in parsed.paragraphs
         )
         self.assertIn("Introducción", visible_text)
+        self.assertIn("Primer tema", visible_text)
         self.assertIn("Tema principal", visible_text)
+        toc_paragraphs = [
+            paragraph
+            for paragraph in parsed.paragraphs
+            if paragraph.text.startswith(("Primer tema", "Tema principal"))
+        ]
+        self.assertEqual(len(toc_paragraphs), 4)
+        cached_toc = toc_paragraphs[:2]
+        self.assertEqual(cached_toc[0].paragraph_format.left_indent.pt, 12)
+        self.assertEqual(cached_toc[1].paragraph_format.left_indent.pt, 30)
 
     def test_docx_renders_cover_from_presentation_nodes(self) -> None:
         cover = self.document.get_section(APASectionType.PRESENTATION)
@@ -192,6 +228,11 @@ class ExportTableOfContentsTest(unittest.TestCase):
 
         self.assertEqual(rendered.paragraphs[0].text, "Edited node title")
         self.assertEqual(rendered.paragraphs[1].text, "Edited cover line")
+        self.assertEqual(
+            rendered.paragraphs[0].alignment,
+            rendered.paragraphs[1].alignment,
+        )
+        self.assertEqual(rendered.paragraphs[1].alignment, 1)
         self.assertNotIn(
             "Stale metadata title",
             "\n".join(paragraph.text for paragraph in rendered.paragraphs),
@@ -325,6 +366,7 @@ class ExportTableOfContentsTest(unittest.TestCase):
             sum(node.type == PAGE_BREAK for node in presentation.body_nodes),
             3,
         )
+        self.assertEqual(presentation.body_nodes[0].type, PAGE_BREAK)
 
     def test_parser_preserves_heading_one_and_table_layout(self) -> None:
         table = DocumentNode(

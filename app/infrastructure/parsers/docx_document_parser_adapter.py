@@ -144,16 +144,14 @@ class DocxDocumentParserAdapter(DocumentParserPort):
                 if heading is not None:
                     body.extend(
                         DocumentNode(type=PAGE_BREAK)
-                        for _ in range(leading_page_breaks)
+                        for _ in range(
+                            leading_page_breaks + inline_page_breaks
+                        )
                     )
                 flush()
                 current_type = detected
                 heading = _heading_node(paragraph, detected)
                 body = []
-                body.extend(
-                    DocumentNode(type=PAGE_BREAK)
-                    for _ in range(inline_page_breaks)
-                )
                 continue
             if heading is None:
                 # Content before the first semantic heading is the cover.
@@ -166,13 +164,9 @@ class DocxDocumentParserAdapter(DocumentParserPort):
             node = _paragraph_node(paragraph, style)
             body.extend(
                 DocumentNode(type=PAGE_BREAK)
-                for _ in range(leading_page_breaks)
+                for _ in range(leading_page_breaks + inline_page_breaks)
             )
             body.append(_imported_node(node, current_type))
-            body.extend(
-                DocumentNode(type=PAGE_BREAK)
-                for _ in range(inline_page_breaks)
-            )
 
         flush()
         if not sections:

@@ -135,6 +135,7 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
             return
         _render_inline(title_p, section.heading.children)
         _apply_block_style(title_p, section.heading.styles)
+        title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
         page_breaks = 0
         for node in section.body_nodes:
@@ -145,6 +146,10 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
                 line = docx.add_paragraph(style=ctx["styles"]["CoverLine"])
                 _render_inline(line, node.children)
                 _apply_block_style(line, node.styles)
+                # APA 7 requires every cover-page information line to be
+                # centered. Persisted editor styles must not override that
+                # structural requirement.
+                line.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
         # Defensive fallback for legacy/incomplete documents. Normally the
         # canonical transition is already a node at the end of the cover.
@@ -541,13 +546,16 @@ def _insert_toc_field(
     paragraphs = []
     for level, title, page_number in entries:
         paragraph = docx.add_paragraph()
-        paragraph.paragraph_format.left_indent = Pt(18 * level)
+        _apply_block_style(paragraph, styles or {})
+        base_indent = paragraph.paragraph_format.left_indent
+        paragraph.paragraph_format.left_indent = Pt(
+            (base_indent.pt if base_indent is not None else 0) + 18 * level
+        )
         paragraph.paragraph_format.tab_stops.add_tab_stop(
             Pt(content_width_pt),
             WD_TAB_ALIGNMENT.RIGHT,
             WD_TAB_LEADER.DOTS,
         )
-        _apply_block_style(paragraph, styles or {})
         paragraph.add_run(title)
         paragraph.add_run("\t")
         paragraph.add_run(str(page_number))

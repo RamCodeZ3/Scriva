@@ -102,6 +102,11 @@ _FONT_FAMILIES = {
 }
 
 
+def _centered_style(style: ParagraphStyle) -> ParagraphStyle:
+    """Force the APA cover-page alignment after applying editor styles."""
+    return ParagraphStyle(style.name, parent=style, alignment=TA_CENTER)
+
+
 class _ApaDocTemplate(BaseDocTemplate):
     def afterFlowable(self, flowable):
         if not isinstance(flowable, Paragraph):
@@ -227,9 +232,11 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
                 _render_inline(section.heading.children)
                 if section is not None
                 else _xml_escape(document.title),
-                _apply_block_style(
-                    styles["TitleCover"],
-                    section.heading.styles if section is not None else {},
+                _centered_style(
+                    _apply_block_style(
+                        styles["TitleCover"],
+                        section.heading.styles if section is not None else {},
+                    )
                 ),
             ),
             Spacer(1, 0.5 * inch),
@@ -244,7 +251,9 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
             elements.append(
                 Paragraph(
                     _render_inline(node.children),
-                    _apply_block_style(styles["CoverLine"], node.styles),
+                    _centered_style(
+                        _apply_block_style(styles["CoverLine"], node.styles)
+                    ),
                 )
             )
         return elements
