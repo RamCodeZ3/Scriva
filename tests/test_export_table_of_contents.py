@@ -17,6 +17,7 @@ from domain.value_objects.apa_structure import APASection, APASectionType
 from domain.value_objects.document_node import (
     HEADING_1,
     HEADING_2,
+    MARK_BACKGROUND_SHADING,
     MARK_COLOR,
     MARK_HIGHLIGHT,
     MARK_LINK,
@@ -50,6 +51,7 @@ from infrastructure.export.pdf_document_exporter_adapter import (
 )
 from infrastructure.parsers.docx_document_parser_adapter import (
     DocxDocumentParserAdapter,
+    _paragraph_styles,
 )
 from infrastructure.persistence.supabase_document_repository import (
     _sections_from_children,
@@ -138,6 +140,88 @@ class ExportTableOfContentsTest(unittest.TestCase):
         self.assertIn('size="36"', paragraph.text)
         self.assertIn("<b><font", paragraph.text)
         self.assertIn("inline</font></b>", paragraph.text)
+
+    def test_pdf_renders_highlight_and_background_shading(self) -> None:
+        styles = _build_pdf_styles(self.document.global_style)
+        node = DocumentNode(
+            type=PARAGRAPH,
+            children=(
+                text_node(
+                    "Highlighted",
+                    marks=(Mark(MARK_HIGHLIGHT, "yellow"),),
+                ),
+                text_node(
+                    " shaded",
+                    marks=(Mark(MARK_BACKGROUND_SHADING, "#F5F5F5"),),
+                ),
+                text_node(
+                    " custom",
+                    marks=(Mark(MARK_HIGHLIGHT, "#ABCDEF"),),
+                ),
+            ),
+        )
+
+        paragraph = _render_pdf_block(node, styles, 468)[0]
+
+        self.assertIn('backColor="#FFFF00"', paragraph.text)
+        self.assertIn('backColor="#F5F5F5"', paragraph.text)
+        self.assertIn('backColor="#ABCDEF"', paragraph.text)
+        self.assertEqual(paragraph.frags[0].backColor.hexval(), "0xffff00")
+        self.assertEqual(paragraph.frags[1].backColor.hexval(), "0xf5f5f5")
+        self.assertEqual(paragraph.frags[2].backColor.hexval(), "0xabcdef")
+
+    def test_pdf_supports_relative_and_absolute_line_height(self) -> None:
+        styles = _build_pdf_styles(self.document.global_style)
+        relative = DocumentNode(
+            type=PARAGRAPH,
+            styles={"fontSize": "12pt", "lineHeight": 1.5},
+            children=(text_node("Relative"),),
+        )
+        absolute = DocumentNode(
+            type=PARAGRAPH,
+            styles={"fontSize": "12pt", "lineHeight": "30pt"},
+            children=(text_node("Absolute"),),
+        )
+
+        relative_paragraph = _render_pdf_block(relative, styles, 468)[0]
+        absolute_paragraph = _render_pdf_block(absolute, styles, 468)[0]
+
+        self.assertEqual(relative_paragraph.style.leading, 18)
+        self.assertEqual(absolute_paragraph.style.leading, 30)
+
+    def test_pdf_does_not_apply_large_inline_font_to_every_line(self) -> None:
+        styles = _build_pdf_styles(self.document.global_style)
+        node = DocumentNode(
+            type=PARAGRAPH,
+            styles={"fontSize": "12pt", "lineHeight": 1.0},
+            children=(
+                text_node(
+                    "Large",
+                    marks=(Mark("fontSize", "36pt"),),
+                ),
+                text_node(" regular text " * 30),
+            ),
+        )
+
+        paragraph = _render_pdf_block(node, styles, 468)[0]
+        paragraph.wrap(468, 700)
+        line_heights = [
+            line.ascent - line.descent for line in paragraph.blPara.lines
+        ]
+
+        self.assertGreater(line_heights[0], 30)
+        self.assertTrue(all(height < 15 for height in line_heights[1:]))
+        self.assertEqual(paragraph.style.leading, 12)
+        self.assertEqual(paragraph.style.spaceAfter, 12)
+
+    def test_parser_reads_line_height_inherited_from_docx_style(self) -> None:
+        docx = ReadDocx()
+        docx.styles["Normal"].paragraph_format.line_spacing = 1.5
+        paragraph = docx.add_paragraph("Inherited spacing")
+
+        styles = _paragraph_styles(paragraph)
+
+        self.assertEqual(styles["lineHeight"], 1.5)
 
     def test_pdf_removes_body_indent_inside_table_cells(self) -> None:
         styles = _build_pdf_styles(self.document.global_style)

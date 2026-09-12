@@ -101,6 +101,25 @@ _FONT_FAMILIES = {
     ),
 }
 
+_HIGHLIGHT_COLORS = {
+    "yellow": "#FFFF00",
+    "green": "#00FF00",
+    "cyan": "#00FFFF",
+    "magenta": "#FF00FF",
+    "blue": "#0000FF",
+    "red": "#FF0000",
+    "darkBlue": "#000080",
+    "darkCyan": "#008080",
+    "darkGreen": "#008000",
+    "darkMagenta": "#800080",
+    "darkRed": "#800000",
+    "darkYellow": "#808000",
+    "darkGray": "#808080",
+    "lightGray": "#C0C0C0",
+    "black": "#000000",
+    "white": "#FFFFFF",
+}
+
 
 def _centered_style(style: ParagraphStyle) -> ParagraphStyle:
     """Force the APA cover-page alignment after applying editor styles."""
@@ -674,6 +693,13 @@ def _render_leaf(
     if "fontFamily" in by_type:
         regular, *_ = _resolve_font_family(str(by_type["fontFamily"]))
         font_attrs += f' face="{regular}"'
+    background = by_type.get("backgroundShading")
+    if background is None:
+        highlight = by_type.get("highlight")
+        if highlight != "none":
+            background = _HIGHLIGHT_COLORS.get(str(highlight), highlight)
+    if _parse_color(background, default=None) is not None:
+        font_attrs += f' backColor="{_xml_escape(str(background))}"'
     if font_attrs:
         chunk = f"<font{font_attrs}>{chunk}</font>"
 
@@ -691,8 +717,6 @@ def _render_leaf(
     if "link" in by_type:
         url = _xml_escape(str(by_type["link"].get("url", "")))
         chunk = f'<link href="{url}">{chunk}</link>'
-    # "highlight" has no ReportLab equivalent — intentionally not rendered.
-
     return chunk
 
 
@@ -875,12 +899,19 @@ def _paragraph_style(
 ) -> ParagraphStyle:
     style = _apply_block_style(base, node_styles)
     largest_size = _largest_font_size(nodes, style.fontSize)
-    leading = max(style.leading, largest_size * 1.2)
+    space_after = style.spaceAfter
+    if largest_size * 1.2 > style.leading:
+        # ReportLab's per-line auto-leading measures the tall line correctly,
+        # but undercounts the flowable's bottom edge by one regular line when
+        # a much larger inline run is present. Reserve that line so the next
+        # paragraph cannot be drawn over the final line of this one.
+        space_after += style.leading
     return ParagraphStyle(
         style.name,
         parent=style,
         autoLeading="max",
-        leading=leading,
+        leading=style.leading,
+        spaceAfter=space_after,
     )
 
 
@@ -957,9 +988,11 @@ def _apply_block_style(
         if value is not None:
             overrides["rightIndent"] = value
     if "lineHeight" in node_styles:
-        factor = _coerce_float(node_styles["lineHeight"], default=None)
-        if factor is not None:
-            overrides["leading"] = effective_size * factor
+        leading = _resolve_line_height(
+            node_styles["lineHeight"], font_size=effective_size
+        )
+        if leading is not None:
+            overrides["leading"] = leading
     elif effective_size != base.fontSize:
         overrides["leading"] = effective_size * (base.leading / base.fontSize)
 
@@ -1163,6 +1196,17 @@ def _coerce_float(value, *, default):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _resolve_line_height(value, *, font_size: float) -> float | None:
+    """Resolve a unitless multiplier or an absolute CSS-like length."""
+    if isinstance(value, (int, float)):
+        return font_size * float(value)
+    text = str(value).strip().lower()
+    if text.endswith(("pt", "px", "in", "cm", "mm")):
+        return _parse_length(text, default=None)
+    factor = _coerce_float(text, default=None)
+    return font_size * factor if factor is not None else None
 
 
 def _safe_filename(title: str) -> str:
