@@ -17,6 +17,7 @@ from domain.value_objects.apa_structure import APASection, APASectionType
 from domain.value_objects.document_node import (
     HEADING_1,
     HEADING_2,
+    MARK_BACKGROUND_SHADING,
     MARK_COLOR,
     MARK_HIGHLIGHT,
     MARK_LINK,
@@ -42,8 +43,15 @@ from infrastructure.export.docx_document_exporter_adapter import (
 from infrastructure.export.pdf_document_exporter_adapter import (
     PdfDocumentExporterAdapter,
 )
+from infrastructure.export.pdf_document_exporter_adapter import (
+    _build_styles as _build_pdf_styles,
+)
+from infrastructure.export.pdf_document_exporter_adapter import (
+    _render_block as _render_pdf_block,
+)
 from infrastructure.parsers.docx_document_parser_adapter import (
     DocxDocumentParserAdapter,
+    _paragraph_styles,
 )
 from infrastructure.persistence.supabase_document_repository import (
     _sections_from_children,
@@ -102,6 +110,143 @@ class ExportTableOfContentsTest(unittest.TestCase):
         self.assertTrue(run.font.italic)
         self.assertTrue(run.font.bold)
 
+    def test_pdf_applies_block_and_inline_styles_with_docx_parity(
+        self,
+    ) -> None:
+        styles = _build_pdf_styles(self.document.global_style)
+        heading = DocumentNode(
+            type=HEADING_1,
+            styles={
+                "textAlign": "left",
+                "fontSize": "24pt",
+                "color": "#112233",
+            },
+            children=(
+                text_node("Large "),
+                text_node(
+                    "inline",
+                    marks=(Mark("fontSize", "36pt"), Mark("bold")),
+                ),
+            ),
+        )
+
+        paragraph = _render_pdf_block(heading, styles, 468)[0]
+
+        self.assertEqual(paragraph.style.fontSize, 24)
+        self.assertEqual(paragraph.style.leading, 48)
+        self.assertEqual(paragraph.style.autoLeading, "max")
+        self.assertEqual(paragraph.style.alignment, 0)
+        self.assertEqual(paragraph.style.textColor.hexval(), "0x112233")
+        self.assertIn('size="36"', paragraph.text)
+        self.assertIn("<b><font", paragraph.text)
+        self.assertIn("inline</font></b>", paragraph.text)
+
+    def test_pdf_renders_highlight_and_background_shading(self) -> None:
+        styles = _build_pdf_styles(self.document.global_style)
+        node = DocumentNode(
+            type=PARAGRAPH,
+            children=(
+                text_node(
+                    "Highlighted",
+                    marks=(Mark(MARK_HIGHLIGHT, "yellow"),),
+                ),
+                text_node(
+                    " shaded",
+                    marks=(Mark(MARK_BACKGROUND_SHADING, "#F5F5F5"),),
+                ),
+                text_node(
+                    " custom",
+                    marks=(Mark(MARK_HIGHLIGHT, "#ABCDEF"),),
+                ),
+            ),
+        )
+
+        paragraph = _render_pdf_block(node, styles, 468)[0]
+
+        self.assertIn('backColor="#FFFF00"', paragraph.text)
+        self.assertIn('backColor="#F5F5F5"', paragraph.text)
+        self.assertIn('backColor="#ABCDEF"', paragraph.text)
+        self.assertEqual(paragraph.frags[0].backColor.hexval(), "0xffff00")
+        self.assertEqual(paragraph.frags[1].backColor.hexval(), "0xf5f5f5")
+        self.assertEqual(paragraph.frags[2].backColor.hexval(), "0xabcdef")
+
+    def test_pdf_supports_relative_and_absolute_line_height(self) -> None:
+        styles = _build_pdf_styles(self.document.global_style)
+        relative = DocumentNode(
+            type=PARAGRAPH,
+            styles={"fontSize": "12pt", "lineHeight": 1.5},
+            children=(text_node("Relative"),),
+        )
+        absolute = DocumentNode(
+            type=PARAGRAPH,
+            styles={"fontSize": "12pt", "lineHeight": "30pt"},
+            children=(text_node("Absolute"),),
+        )
+
+        relative_paragraph = _render_pdf_block(relative, styles, 468)[0]
+        absolute_paragraph = _render_pdf_block(absolute, styles, 468)[0]
+
+        self.assertEqual(relative_paragraph.style.leading, 18)
+        self.assertEqual(absolute_paragraph.style.leading, 30)
+
+    def test_pdf_does_not_apply_large_inline_font_to_every_line(self) -> None:
+        styles = _build_pdf_styles(self.document.global_style)
+        node = DocumentNode(
+            type=PARAGRAPH,
+            styles={"fontSize": "12pt", "lineHeight": 1.0},
+            children=(
+                text_node(
+                    "Large",
+                    marks=(Mark("fontSize", "36pt"),),
+                ),
+                text_node(" regular text " * 30),
+            ),
+        )
+
+        paragraph = _render_pdf_block(node, styles, 468)[0]
+        paragraph.wrap(468, 700)
+        line_heights = [
+            line.ascent - line.descent for line in paragraph.blPara.lines
+        ]
+
+        self.assertGreater(line_heights[0], 30)
+        self.assertTrue(all(height < 15 for height in line_heights[1:]))
+        self.assertEqual(paragraph.style.leading, 12)
+        self.assertEqual(paragraph.style.spaceAfter, 12)
+
+    def test_parser_reads_line_height_inherited_from_docx_style(self) -> None:
+        docx = ReadDocx()
+        docx.styles["Normal"].paragraph_format.line_spacing = 1.5
+        paragraph = docx.add_paragraph("Inherited spacing")
+
+        styles = _paragraph_styles(paragraph)
+
+        self.assertEqual(styles["lineHeight"], 1.5)
+
+    def test_pdf_removes_body_indent_inside_table_cells(self) -> None:
+        styles = _build_pdf_styles(self.document.global_style)
+        table = DocumentNode(
+            type=TABLE,
+            children=(
+                DocumentNode(
+                    type=TABLE_ROW,
+                    children=(
+                        DocumentNode(
+                            type=TABLE_CELL,
+                            styles={"width": "100%"},
+                            children=(_block(PARAGRAPH, "Cell content"),),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        rendered = _render_pdf_block(table, styles, 468)[0]
+        cell_paragraph = rendered._cellvalues[0][0][0]
+
+        self.assertEqual(rendered._colWidths, [468])
+        self.assertEqual(cell_paragraph.style.firstLineIndent, 0)
+
     def test_docx_can_be_retrieved_after_persisting_v2_hyperlink(self) -> None:
         introduction = self.document.get_section(APASectionType.INTRODUCTION)
         assert introduction is not None
@@ -137,6 +282,32 @@ class ExportTableOfContentsTest(unittest.TestCase):
     def test_docx_contains_visible_updateable_toc_on_first_render(
         self,
     ) -> None:
+        body = self.document.get_section(APASectionType.BODY)
+        index = self.document.get_section(APASectionType.INDEX)
+        assert body is not None
+        assert index is not None
+        self.document.sections = [
+            replace(
+                section,
+                body_nodes=(
+                    _block(HEADING_1, "Primer tema"),
+                    *section.body_nodes,
+                ),
+            )
+            if section.section_type is APASectionType.BODY
+            else replace(
+                section,
+                body_nodes=tuple(
+                    replace(node, styles={"marginLeft": "12pt"})
+                    if node.type == TABLE_OF_CONTENTS
+                    else node
+                    for node in section.body_nodes
+                ),
+            )
+            if section.section_type is APASectionType.INDEX
+            else section
+            for section in self.document.sections
+        ]
         content = DocxDocumentExporterAdapter()._build_sync(self.document)
 
         with ZipFile(BytesIO(content)) as archive:
@@ -152,7 +323,17 @@ class ExportTableOfContentsTest(unittest.TestCase):
             paragraph.text for paragraph in parsed.paragraphs
         )
         self.assertIn("Introducción", visible_text)
+        self.assertIn("Primer tema", visible_text)
         self.assertIn("Tema principal", visible_text)
+        toc_paragraphs = [
+            paragraph
+            for paragraph in parsed.paragraphs
+            if paragraph.text.startswith(("Primer tema", "Tema principal"))
+        ]
+        self.assertEqual(len(toc_paragraphs), 4)
+        cached_toc = toc_paragraphs[:2]
+        self.assertEqual(cached_toc[0].paragraph_format.left_indent.pt, 12)
+        self.assertEqual(cached_toc[1].paragraph_format.left_indent.pt, 30)
 
     def test_docx_renders_cover_from_presentation_nodes(self) -> None:
         cover = self.document.get_section(APASectionType.PRESENTATION)
@@ -192,6 +373,11 @@ class ExportTableOfContentsTest(unittest.TestCase):
 
         self.assertEqual(rendered.paragraphs[0].text, "Edited node title")
         self.assertEqual(rendered.paragraphs[1].text, "Edited cover line")
+        self.assertEqual(
+            rendered.paragraphs[0].alignment,
+            rendered.paragraphs[1].alignment,
+        )
+        self.assertEqual(rendered.paragraphs[1].alignment, 1)
         self.assertNotIn(
             "Stale metadata title",
             "\n".join(paragraph.text for paragraph in rendered.paragraphs),
@@ -325,6 +511,7 @@ class ExportTableOfContentsTest(unittest.TestCase):
             sum(node.type == PAGE_BREAK for node in presentation.body_nodes),
             3,
         )
+        self.assertEqual(presentation.body_nodes[0].type, PAGE_BREAK)
 
     def test_parser_preserves_heading_one_and_table_layout(self) -> None:
         table = DocumentNode(

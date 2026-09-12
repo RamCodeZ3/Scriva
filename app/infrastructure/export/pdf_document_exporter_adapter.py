@@ -101,6 +101,30 @@ _FONT_FAMILIES = {
     ),
 }
 
+_HIGHLIGHT_COLORS = {
+    "yellow": "#FFFF00",
+    "green": "#00FF00",
+    "cyan": "#00FFFF",
+    "magenta": "#FF00FF",
+    "blue": "#0000FF",
+    "red": "#FF0000",
+    "darkBlue": "#000080",
+    "darkCyan": "#008080",
+    "darkGreen": "#008000",
+    "darkMagenta": "#800080",
+    "darkRed": "#800000",
+    "darkYellow": "#808000",
+    "darkGray": "#808080",
+    "lightGray": "#C0C0C0",
+    "black": "#000000",
+    "white": "#FFFFFF",
+}
+
+
+def _centered_style(style: ParagraphStyle) -> ParagraphStyle:
+    """Force the APA cover-page alignment after applying editor styles."""
+    return ParagraphStyle(style.name, parent=style, alignment=TA_CENTER)
+
 
 class _ApaDocTemplate(BaseDocTemplate):
     def afterFlowable(self, flowable):
@@ -195,7 +219,7 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
                 document, section_type, styles, content_width
             )
 
-        story += self._build_references(document, styles)
+        story += self._build_references(document, styles, content_width)
 
         # multiBuild (not build): see _ApaDocTemplate docstring — this is
         # what lets the index show real, adapter-discovered page numbers.
@@ -224,12 +248,16 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         elements: list = [
             Spacer(1, 2.5 * inch),
             Paragraph(
-                _render_inline(section.heading.children)
+                _render_inline(
+                    section.heading.children, section.heading.styles
+                )
                 if section is not None
                 else _xml_escape(document.title),
-                _apply_block_style(
-                    styles["TitleCover"],
-                    section.heading.styles if section is not None else {},
+                _centered_style(
+                    _apply_block_style(
+                        styles["TitleCover"],
+                        section.heading.styles if section is not None else {},
+                    )
                 ),
             ),
             Spacer(1, 0.5 * inch),
@@ -243,8 +271,10 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
                 continue
             elements.append(
                 Paragraph(
-                    _render_inline(node.children),
-                    _apply_block_style(styles["CoverLine"], node.styles),
+                    _render_inline(node.children, node.styles),
+                    _centered_style(
+                        _apply_block_style(styles["CoverLine"], node.styles)
+                    ),
                 )
             )
         return elements
@@ -258,7 +288,21 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         # "Heading1Plain" is intentionally NOT the "Heading1" style, so this
         # heading doesn't register itself as a TOC entry.
         elements: list = [
-            Paragraph(_xml_escape(index_title), styles["Heading1Plain"])
+            Paragraph(
+                _render_inline(
+                    index_section.heading.children,
+                    index_section.heading.styles,
+                )
+                if index_section is not None
+                else _xml_escape(index_title),
+                _paragraph_style(
+                    styles["Heading1Plain"],
+                    index_section.heading.styles,
+                    index_section.heading.children,
+                )
+                if index_section is not None
+                else styles["Heading1Plain"],
+            )
         ]
 
         if index_section is None:
@@ -304,16 +348,52 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         elements: list = []
         if section_type is not APASectionType.BODY:
             elements.append(
-                Paragraph(_xml_escape(section.title), styles["Heading1"])
+                Paragraph(
+                    _render_inline(
+                        section.heading.children, section.heading.styles
+                    ),
+                    _paragraph_style(
+                        styles["Heading1"],
+                        section.heading.styles,
+                        section.heading.children,
+                    ),
+                )
             )
         for node in section.body_nodes:
             elements += _render_block(node, styles, content_width)
         return elements
 
-    def _build_references(self, document: Document, styles: dict) -> list:
+    def _build_references(
+        self, document: Document, styles: dict, content_width: float
+    ) -> list:
         sources_section = document.get_section(APASectionType.SOURCES)
         title = sources_section.title if sources_section else "References"
-        elements: list = [Paragraph(_xml_escape(title), styles["Heading1"])]
+        elements: list = [
+            Paragraph(
+                _render_inline(
+                    sources_section.heading.children,
+                    sources_section.heading.styles,
+                )
+                if sources_section is not None
+                else _xml_escape(title),
+                _paragraph_style(
+                    styles["Heading1"],
+                    sources_section.heading.styles,
+                    sources_section.heading.children,
+                )
+                if sources_section is not None
+                else styles["Heading1"],
+            )
+        ]
+        imported_references = sources_section is not None and any(
+            node.metadata.get("docxImported")
+            for node in sources_section.body_nodes
+        )
+        if sources_section is not None and imported_references:
+            for node in sources_section.body_nodes:
+                if node.type != PAGE_BREAK:
+                    elements += _render_block(node, styles, content_width)
+            return elements
         for ref in sorted(
             document.sources, key=lambda r: (r.author or "").lower()
         ):
@@ -565,31 +645,41 @@ _MARK_TAG_ORDER = (
 )
 
 
-def _render_inline(nodes: tuple[DocumentNode, ...]) -> str:
+def _render_inline(
+    nodes: tuple[DocumentNode, ...], inherited_styles: dict | None = None
+) -> str:
     """Render inline v2 nodes into ReportLab mini-markup."""
     rendered: list[str] = []
     for node in nodes:
         if node.type == HYPERLINK:
             url = _xml_escape(str(node.metadata.get("url", "")))
-            children = _render_inline(node.children)
+            children = _render_inline(node.children, inherited_styles)
             rendered.append(f'<link href="{url}">{children}</link>')
         elif node.type == TAB:
             rendered.append("&#9;")
         elif node.type == FIELD:
             rendered.append("")
         else:
-            rendered.append(_render_leaf(node))
+            rendered.append(_render_leaf(node, inherited_styles))
     return "".join(rendered)
 
 
-def _render_leaf(node: DocumentNode) -> str:
+def _render_leaf(
+    node: DocumentNode, inherited_styles: dict | None = None
+) -> str:
     if node.text is None:
         raise DocumentBuildError(
             f"Expected a leaf text node, got block '{node.type}'."
         )
     chunk = _xml_escape(node.text)
 
-    by_type = {m.type: m.value for m in node.marks}
+    by_type = {
+        **(inherited_styles or {}),
+        **{
+            mark.type: True if mark.value is None else mark.value
+            for mark in node.marks
+        },
+    }
 
     if "code" in by_type:
         chunk = f'<font face="Courier">{chunk}</font>'
@@ -603,6 +693,13 @@ def _render_leaf(node: DocumentNode) -> str:
     if "fontFamily" in by_type:
         regular, *_ = _resolve_font_family(str(by_type["fontFamily"]))
         font_attrs += f' face="{regular}"'
+    background = by_type.get("backgroundShading")
+    if background is None:
+        highlight = by_type.get("highlight")
+        if highlight != "none":
+            background = _HIGHLIGHT_COLORS.get(str(highlight), highlight)
+    if _parse_color(background, default=None) is not None:
+        font_attrs += f' backColor="{_xml_escape(str(background))}"'
     if font_attrs:
         chunk = f"<font{font_attrs}>{chunk}</font>"
 
@@ -620,8 +717,6 @@ def _render_leaf(node: DocumentNode) -> str:
     if "link" in by_type:
         url = _xml_escape(str(by_type["link"].get("url", "")))
         chunk = f'<link href="{url}">{chunk}</link>'
-    # "highlight" has no ReportLab equivalent — intentionally not rendered.
-
     return chunk
 
 
@@ -637,45 +732,69 @@ _HEADING_STYLE_NAMES = {
 
 
 def _render_block(
-    node: DocumentNode, styles: dict, content_width: float
+    node: DocumentNode,
+    styles: dict,
+    content_width: float,
+    inherited_styles: dict | None = None,
 ) -> list:
+    resolved_styles = {**(inherited_styles or {}), **node.styles}
     if node.type in {PAGE_BREAK, SECTION_BREAK}:
         return [PageBreak()]
 
     if node.type in _HEADING_STYLE_NAMES:
         base = styles[_HEADING_STYLE_NAMES[node.type]]
-        style = _apply_block_style(base, node.styles)
-        return [Paragraph(_render_inline(node.children), style)]
+        style = _paragraph_style(base, resolved_styles, node.children)
+        return [
+            Paragraph(_render_inline(node.children, resolved_styles), style)
+        ]
 
     if node.type == PARAGRAPH:
-        style = _apply_block_style(styles["Body"], node.styles)
-        paragraph = Paragraph(_render_inline(node.children), style)
-        return _wrap_with_box(paragraph, node.styles, content_width)
+        style = _paragraph_style(
+            styles["Body"], resolved_styles, node.children
+        )
+        paragraph = Paragraph(
+            _render_inline(node.children, resolved_styles), style
+        )
+        return _wrap_with_box(paragraph, resolved_styles, content_width)
 
     if node.type == BLOCK_QUOTE:
-        style = _apply_block_style(styles["BlockQuote"], node.styles)
-        paragraph = Paragraph(_render_inline(node.children), style)
-        return _wrap_with_box(paragraph, node.styles, content_width)
+        style = _paragraph_style(
+            styles["BlockQuote"], resolved_styles, node.children
+        )
+        paragraph = Paragraph(
+            _render_inline(node.children, resolved_styles), style
+        )
+        return _wrap_with_box(paragraph, resolved_styles, content_width)
 
     if node.type == BULLETED_LIST:
-        style = _apply_block_style(styles["Bullet"], node.styles)
         return [
-            Paragraph(f"•  {_render_inline(item.children)}", style)
+            Paragraph(
+                f"•  {_render_inline(item.children, item_styles)}",
+                _paragraph_style(styles["Bullet"], item_styles, item.children),
+            )
             for item in node.children
+            for item_styles in ({**resolved_styles, **item.styles},)
         ]
 
     if node.type == NUMBERED_LIST:
-        style = _apply_block_style(styles["Numbered"], node.styles)
         return [
-            Paragraph(f"{i}.  {_render_inline(item.children)}", style)
+            Paragraph(
+                f"{i}.  {_render_inline(item.children, item_styles)}",
+                _paragraph_style(
+                    styles["Numbered"], item_styles, item.children
+                ),
+            )
             for i, item in enumerate(node.children, start=1)
+            for item_styles in ({**resolved_styles, **item.styles},)
         ]
 
     if node.type == IMAGE:
         return _render_image(node, styles, content_width)
 
     if node.type == TABLE:
-        return [_render_table(node, styles, content_width)]
+        return [
+            _render_table(node, styles, content_width, inherited_styles or {})
+        ]
 
     raise DocumentBuildError(
         f"Unsupported block node in section: '{node.type}'"
@@ -683,16 +802,21 @@ def _render_block(
 
 
 def _render_table(
-    node: DocumentNode, styles: dict, content_width: float
+    node: DocumentNode,
+    styles: dict,
+    content_width: float,
+    inherited_styles: dict,
 ) -> Table:
     rows = node.children  # each is a TABLE_ROW node
+    table_styles = {**inherited_styles, **node.styles}
     if not rows:
         raise DocumentBuildError("A 'table' node has no rows.")
 
     n_cols = len(rows[0].children)
     requested_widths = [cell.styles.get("width") for cell in rows[0].children]
     column_widths = [
-        _parse_length(value, default=None) for value in requested_widths
+        _resolve_dimension(value, content_width, default=None)
+        for value in requested_widths
     ]
     if any(width is None for width in column_widths):
         col_width = content_width / n_cols if n_cols else content_width
@@ -707,16 +831,33 @@ def _render_table(
                 f"{len(row.children)})."
             )
         row_cells = []
+        row_styles = {**table_styles, **row.styles}
         for cell_index, cell in enumerate(row.children):
+            cell_styles = {**row_styles, **cell.styles}
             cell_flowables: list = []
             for child in cell.children:
+                child_styles = cell_styles
+                if "textIndent" not in child.styles:
+                    child_styles = {**cell_styles, "textIndent": 0}
                 cell_flowables += _render_block(
-                    child, styles, column_widths[cell_index]
+                    child,
+                    styles,
+                    column_widths[cell_index],
+                    child_styles,
                 )
             row_cells.append(cell_flowables)
         data.append(row_cells)
 
-    table = Table(data, colWidths=column_widths)
+    row_heights = [
+        _parse_length(row.styles.get("height"), default=None) for row in rows
+    ]
+    table = Table(data, colWidths=column_widths, rowHeights=row_heights)
+    alignment = str(
+        node.styles.get("textAlign", node.styles.get("alignment", "center"))
+    ).upper()
+    table.hAlign = (
+        alignment if alignment in {"LEFT", "CENTER", "RIGHT"} else "CENTER"
+    )
     commands = [
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("GRID", (0, 0), (-1, -1), 0.75, colors.black),
@@ -728,8 +869,69 @@ def _render_table(
     if len(data) > 1:
         # First row is conventionally the header row.
         commands.append(("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke))
+    table_background = _parse_color(
+        node.styles.get("backgroundColor"), default=None
+    )
+    if table_background is not None:
+        commands.append(("BACKGROUND", (0, 0), (-1, -1), table_background))
+    for row_index, row in enumerate(rows):
+        for cell_index, cell in enumerate(row.children):
+            background = _parse_color(
+                cell.styles.get("backgroundColor"), default=None
+            )
+            if background is not None:
+                commands.append(
+                    (
+                        "BACKGROUND",
+                        (cell_index, row_index),
+                        (cell_index, row_index),
+                        background,
+                    )
+                )
     table.setStyle(TableStyle(commands))
     return table
+
+
+def _paragraph_style(
+    base: ParagraphStyle,
+    node_styles: dict,
+    nodes: tuple[DocumentNode, ...],
+) -> ParagraphStyle:
+    style = _apply_block_style(base, node_styles)
+    largest_size = _largest_font_size(nodes, style.fontSize)
+    space_after = style.spaceAfter
+    if largest_size * 1.2 > style.leading:
+        # ReportLab's per-line auto-leading measures the tall line correctly,
+        # but undercounts the flowable's bottom edge by one regular line when
+        # a much larger inline run is present. Reserve that line so the next
+        # paragraph cannot be drawn over the final line of this one.
+        space_after += style.leading
+    return ParagraphStyle(
+        style.name,
+        parent=style,
+        autoLeading="max",
+        leading=style.leading,
+        spaceAfter=space_after,
+    )
+
+
+def _largest_font_size(
+    nodes: tuple[DocumentNode, ...], default: float
+) -> float:
+    largest = default
+    for node in nodes:
+        if node.text is None:
+            largest = max(largest, _largest_font_size(node.children, default))
+            continue
+        mark = next(
+            (mark for mark in node.marks if mark.type == "fontSize"), None
+        )
+        if mark is not None:
+            largest = max(
+                largest,
+                _parse_length(mark.value, default=default) or default,
+            )
+    return largest
 
 
 def _apply_block_style(
@@ -739,6 +941,28 @@ def _apply_block_style(
         return base
 
     overrides: dict = {}
+    effective_size = base.fontSize
+    if "fontSize" in node_styles:
+        value = _parse_length(node_styles["fontSize"], default=None)
+        if value is not None:
+            effective_size = value
+            overrides["fontSize"] = value
+    if "fontFamily" in node_styles:
+        regular, bold, italic, bold_italic = _resolve_font_family(
+            str(node_styles["fontFamily"])
+        )
+        if node_styles.get("bold") and node_styles.get("italic"):
+            overrides["fontName"] = bold_italic
+        elif node_styles.get("bold"):
+            overrides["fontName"] = bold
+        elif node_styles.get("italic"):
+            overrides["fontName"] = italic
+        else:
+            overrides["fontName"] = regular
+    if "color" in node_styles:
+        color = _parse_color(node_styles["color"], default=None)
+        if color is not None:
+            overrides["textColor"] = color
     if "textAlign" in node_styles:
         align = _ALIGN_MAP.get(str(node_styles["textAlign"]).lower())
         if align is not None:
@@ -764,9 +988,13 @@ def _apply_block_style(
         if value is not None:
             overrides["rightIndent"] = value
     if "lineHeight" in node_styles:
-        factor = _coerce_float(node_styles["lineHeight"], default=None)
-        if factor is not None:
-            overrides["leading"] = base.fontSize * factor
+        leading = _resolve_line_height(
+            node_styles["lineHeight"], font_size=effective_size
+        )
+        if leading is not None:
+            overrides["leading"] = leading
+    elif effective_size != base.fontSize:
+        overrides["leading"] = effective_size * (base.leading / base.fontSize)
 
     if not overrides:
         return base
@@ -968,6 +1196,17 @@ def _coerce_float(value, *, default):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _resolve_line_height(value, *, font_size: float) -> float | None:
+    """Resolve a unitless multiplier or an absolute CSS-like length."""
+    if isinstance(value, (int, float)):
+        return font_size * float(value)
+    text = str(value).strip().lower()
+    if text.endswith(("pt", "px", "in", "cm", "mm")):
+        return _parse_length(text, default=None)
+    factor = _coerce_float(text, default=None)
+    return font_size * factor if factor is not None else None
 
 
 def _safe_filename(title: str) -> str:

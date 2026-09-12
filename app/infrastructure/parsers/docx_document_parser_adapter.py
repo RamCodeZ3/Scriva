@@ -144,16 +144,14 @@ class DocxDocumentParserAdapter(DocumentParserPort):
                 if heading is not None:
                     body.extend(
                         DocumentNode(type=PAGE_BREAK)
-                        for _ in range(leading_page_breaks)
+                        for _ in range(
+                            leading_page_breaks + inline_page_breaks
+                        )
                     )
                 flush()
                 current_type = detected
                 heading = _heading_node(paragraph, detected)
                 body = []
-                body.extend(
-                    DocumentNode(type=PAGE_BREAK)
-                    for _ in range(inline_page_breaks)
-                )
                 continue
             if heading is None:
                 # Content before the first semantic heading is the cover.
@@ -166,13 +164,9 @@ class DocxDocumentParserAdapter(DocumentParserPort):
             node = _paragraph_node(paragraph, style)
             body.extend(
                 DocumentNode(type=PAGE_BREAK)
-                for _ in range(leading_page_breaks)
+                for _ in range(leading_page_breaks + inline_page_breaks)
             )
             body.append(_imported_node(node, current_type))
-            body.extend(
-                DocumentNode(type=PAGE_BREAK)
-                for _ in range(inline_page_breaks)
-            )
 
         flush()
         if not sections:
@@ -445,9 +439,26 @@ def _paragraph_styles(paragraph) -> dict[str, str | float]:
     for name, length in lengths.items():
         if length is not None:
             styles[name] = f"{length.pt:g}pt"
-    spacing = paragraph_format.line_spacing
+    spacing = _effective_line_spacing(paragraph)
     if isinstance(spacing, float):
         styles["lineHeight"] = spacing
     elif spacing is not None:
         styles["lineHeight"] = f"{spacing.pt:g}pt"
     return styles
+
+
+def _effective_line_spacing(paragraph):
+    """Return direct spacing or the first value inherited from its styles."""
+    spacing = paragraph.paragraph_format.line_spacing
+    if spacing is not None:
+        return spacing
+
+    style = paragraph.style
+    visited: set[str] = set()
+    while style is not None and style.style_id not in visited:
+        visited.add(style.style_id)
+        spacing = style.paragraph_format.line_spacing
+        if spacing is not None:
+            return spacing
+        style = style.base_style
+    return None
