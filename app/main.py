@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uvicorn
 from api.v1.documents import router as documents_router
+from api.v1.google_credentials import router as google_credentials_router
 from api.v1.sources import router as sources_router
 from application.exceptions import (
     ApplicationError,
@@ -39,6 +40,7 @@ app.add_middleware(
 
 app.include_router(documents_router)
 app.include_router(sources_router)
+app.include_router(google_credentials_router)
 
 
 @app.exception_handler(UserNotFoundError)
