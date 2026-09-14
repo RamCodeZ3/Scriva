@@ -8,10 +8,8 @@ from application.ports.document_exporter_resolver_port import (
     UnsupportedExportTargetError,
 )
 from application.ports.google_credentials_port import GoogleCredentialsPort
+from application.ports.google_oauth_token_port import GoogleOAuthTokenPort
 
-from infrastructure.auth.google_oauth_token_provider import (
-    GoogleOAuthTokenProvider,
-)
 from infrastructure.export.docx_document_exporter_adapter import (
     DocxDocumentExporterAdapter,
 )
@@ -28,7 +26,7 @@ class DocumentExporterResolverAdapter(DocumentExporterResolverPort):
         self,
         pdf_exporter: PdfDocumentExporterAdapter,
         google_credentials_repository: GoogleCredentialsPort,
-        google_token_provider: GoogleOAuthTokenProvider,
+        google_token_provider: GoogleOAuthTokenPort,
     ) -> None:
         self._pdf_exporter = pdf_exporter
         self._google_credentials_repository = google_credentials_repository
@@ -40,7 +38,7 @@ class DocumentExporterResolverAdapter(DocumentExporterResolverPort):
         if export_target == "pdf":
             return self._pdf_exporter
 
-        if export_target == "google_doc":
+        if export_target in {"google_doc", "google_docs"}:
             refresh_token = (
                 await self._google_credentials_repository.get_refresh_token(
                     user_id
