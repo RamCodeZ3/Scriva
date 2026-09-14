@@ -40,7 +40,7 @@ class DocumentExporterResolverAdapter(DocumentExporterResolverPort):
         if export_target == "pdf":
             return self._pdf_exporter
 
-        if export_target == "google_doc":
+        if export_target in {"google_doc", "google_docs"}:
             refresh_token = (
                 await self._google_credentials_repository.get_refresh_token(
                     user_id
