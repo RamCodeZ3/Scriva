@@ -161,7 +161,7 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
         docx,
         document: Document,
         ctx: dict,
-        toc_entries: list[tuple[int, str, int]],
+        toc_entries: list[tuple[int, str, int, str]],
     ) -> None:
         index_section = document.get_section(APASectionType.INDEX)
         index_title = index_section.title if index_section else "Índice"
@@ -532,7 +532,7 @@ def _set_outline_level(style, level: int) -> None:
 
 def _insert_toc_field(
     docx,
-    entries: list[tuple[int, str, int]],
+    entries: list[tuple[int, str, int, str]],
     content_width_pt: float,
     styles: dict | None = None,
 ) -> None:
@@ -544,7 +544,7 @@ def _insert_toc_field(
         return
 
     paragraphs = []
-    for level, title, page_number in entries:
+    for level, title, page_number, _ in entries:
         paragraph = docx.add_paragraph()
         _apply_block_style(paragraph, styles or {})
         base_indent = paragraph.paragraph_format.left_indent

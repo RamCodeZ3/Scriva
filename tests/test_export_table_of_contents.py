@@ -63,12 +63,22 @@ class ExportTableOfContentsTest(unittest.TestCase):
         self.document = _document_fixture()
 
     def test_pdf_layout_exposes_resolved_toc_entries(self) -> None:
-        entries = PdfDocumentExporterAdapter().build_toc_entries(self.document)
+        adapter = PdfDocumentExporterAdapter()
+        pdf_bytes, entries = adapter._build_with_toc_entries(self.document)
 
         self.assertIn("Introducción", _entry_titles(entries))
         self.assertIn("Tema principal", _entry_titles(entries))
-        self.assertTrue(all(page_number > 0 for _, _, page_number in entries))
+        self.assertTrue(
+            all(page_number > 0 for _, _, page_number, _ in entries)
+        )
         self.assertIn((1, "Tema principal"), _entry_levels(entries))
+        self.assertEqual(
+            [key for _, _, _, key in entries],
+            [f"toc-heading-{index}" for index in range(1, len(entries) + 1)],
+        )
+        self.assertIn(b"/Outlines", pdf_bytes)
+        self.assertIn(b"/Annots", pdf_bytes)
+        self.assertGreaterEqual(pdf_bytes.count(b"/Dest"), len(entries))
 
     def test_docx_resolves_table_row_cell_and_paragraph_styles(self) -> None:
         docx = ReadDocx()
@@ -313,7 +323,7 @@ class ExportTableOfContentsTest(unittest.TestCase):
         with ZipFile(BytesIO(content)) as archive:
             document_xml = archive.read("word/document.xml").decode("utf-8")
 
-        self.assertIn('TOC \\o "1-2"', document_xml)
+        self.assertIn('TOC \\o "1-2" \\h \\z \\u', document_xml)
         self.assertIn('w:dirty="true"', document_xml)
         self.assertNotIn("Actualizar campos", document_xml)
         self.assertEqual(document_xml.count('w:br w:type="page"'), 3)
@@ -633,12 +643,14 @@ class ExportTableOfContentsTest(unittest.TestCase):
         self.assertIn("Edited reference text", visible_text)
 
 
-def _entry_titles(entries: list[tuple[int, str, int]]) -> set[str]:
-    return {title for _, title, _ in entries}
+def _entry_titles(entries: list[tuple[int, str, int, str]]) -> set[str]:
+    return {title for _, title, _, _ in entries}
 
 
-def _entry_levels(entries: list[tuple[int, str, int]]) -> set[tuple[int, str]]:
-    return {(level, title) for level, title, _ in entries}
+def _entry_levels(
+    entries: list[tuple[int, str, int, str]],
+) -> set[tuple[int, str]]:
+    return {(level, title) for level, title, _, _ in entries}
 
 
 def _parsed_section(

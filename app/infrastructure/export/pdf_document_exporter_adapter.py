@@ -127,14 +127,24 @@ def _centered_style(style: ParagraphStyle) -> ParagraphStyle:
 
 
 class _ApaDocTemplate(BaseDocTemplate):
+    def beforeDocument(self) -> None:
+        """Reset bookmark names before every pass of ``multiBuild``."""
+        self._toc_heading_seq = 0
+
     def afterFlowable(self, flowable):
         if not isinstance(flowable, Paragraph):
             return
         style_name = getattr(flowable.style, "name", "")
-        if style_name == "Heading1":
-            self.notify("TOCEntry", (0, flowable.getPlainText(), self.page))
-        elif style_name == "Heading2":
-            self.notify("TOCEntry", (1, flowable.getPlainText(), self.page))
+        level = {"Heading1": 0, "Heading2": 1}.get(style_name)
+        if level is None:
+            return
+
+        self._toc_heading_seq += 1
+        key = f"toc-heading-{self._toc_heading_seq}"
+        text = flowable.getPlainText()
+        self.canv.bookmarkPage(key)
+        self.canv.addOutlineEntry(text, key, level, closed=0)
+        self.notify("TOCEntry", (level, text, self.page, key))
 
 
 class PdfDocumentExporterAdapter(DocumentExporterPort):
@@ -157,7 +167,7 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
 
     def build_toc_entries(
         self, document: Document
-    ) -> list[tuple[int, str, int]]:
+    ) -> list[tuple[int, str, int, str]]:
         """Lay out a document and return its resolved TOC entries.
 
         ReportLab needs the same multi-pass build used by PDF export to know
@@ -169,7 +179,7 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
 
     def _build_with_toc_entries(
         self, document: Document
-    ) -> tuple[bytes, list[tuple[int, str, int]]]:
+    ) -> tuple[bytes, list[tuple[int, str, int, str]]]:
         doc_styles = normalize_document_styles(document.global_style)
         page_size = _resolve_page_size(doc_styles)
         margins = _resolve_margins(doc_styles)
@@ -234,8 +244,8 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         )
         raw_entries = getattr(toc, "_lastEntries", ()) if toc else ()
         entries = [
-            (int(level), str(text), int(page_number))
-            for level, text, page_number, _ in raw_entries
+            (int(level), str(text), int(page_number), str(key))
+            for level, text, page_number, key in raw_entries
         ]
         return buffer.getvalue(), entries
 
