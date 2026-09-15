@@ -8,13 +8,16 @@ from uuid import uuid4
 
 from domain.value_objects.apa_structure import APASectionType
 from domain.value_objects.document_node import (
+    BOOKMARK,
     BULLETED_LIST,
     HEADING_2,
     LIST_ITEM,
     MARK_COLOR,
+    MARK_HIGHLIGHT,
     PARAGRAPH,
     TABLE,
     TABLE_CELL,
+    TABLE_OF_CONTENTS,
     TABLE_ROW,
     DocumentNode,
     Mark,
@@ -176,7 +179,7 @@ class GoogleDocsNodeTreeExporterTest(unittest.TestCase):
         self.assertIn("Styled link\n", inserted_text)
         self.assertIn("First item\n", inserted_text)
         self.assertIn("Second item\n", inserted_text)
-        self.assertIn("Cell A\tCell B\n", inserted_text)
+        self.assertTrue(any("insertTable" in item for item in requests))
         self.assertTrue(any("insertPageBreak" in item for item in requests))
         self.assertEqual(
             sum("createParagraphBullets" in item for item in requests), 2
@@ -207,5 +210,94 @@ class GoogleDocsNodeTreeExporterTest(unittest.TestCase):
                 style.get("link", {}).get("url")
                 == "https://example.com/source"
                 for style in text_styles
+            )
+        )
+
+    def test_preserves_highlights_bookmarks_and_meta_only_headings(
+        self,
+    ) -> None:
+        document = _document_fixture()
+        body = document.get_section(APASectionType.BODY)
+        assert body is not None
+        document.sections = [
+            replace(
+                section,
+                body_nodes=(
+                    DocumentNode(
+                        type=HEADING_2,
+                        metadata={"meta_only": True},
+                        children=(text_node("Internal title"),),
+                    ),
+                    DocumentNode(
+                        type=PARAGRAPH,
+                        children=(
+                            text_node(
+                                "Named",
+                                marks=(Mark(MARK_HIGHLIGHT, "yellow"),),
+                            ),
+                            text_node(
+                                " RGB",
+                                marks=(Mark(MARK_HIGHLIGHT, "rgb(1, 2, 3)"),),
+                            ),
+                            DocumentNode(
+                                type=BOOKMARK,
+                                id="bookmark-1",
+                                children=(text_node(" target"),),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+            if section.section_type is APASectionType.BODY
+            else section
+            for section in document.sections
+        ]
+
+        requests = GoogleDocsExporterAdapter("access")._build_requests(
+            document
+        )
+
+        inserted = [
+            item["insertText"]["text"]
+            for item in requests
+            if "insertText" in item
+        ]
+        self.assertNotIn("Internal title\n", inserted)
+        highlight_styles = [
+            item["updateTextStyle"]["textStyle"]
+            for item in requests
+            if "updateTextStyle" in item
+            and "backgroundColor" in item["updateTextStyle"]["textStyle"]
+        ]
+        self.assertEqual(len(highlight_styles), 2)
+        self.assertTrue(
+            any(
+                item.get("createNamedRange", {}).get("name") == "bookmark-1"
+                for item in requests
+            )
+        )
+
+    def test_keeps_toc_placeholder_for_the_second_pass(self) -> None:
+        document = _document_fixture()
+        body = document.get_section(APASectionType.BODY)
+        assert body is not None
+        document.sections = [
+            replace(
+                section,
+                body_nodes=(DocumentNode(type=TABLE_OF_CONTENTS),),
+            )
+            if section.section_type is APASectionType.BODY
+            else section
+            for section in document.sections
+        ]
+
+        requests = GoogleDocsExporterAdapter("access")._build_requests(
+            document
+        )
+
+        self.assertTrue(
+            any(
+                "SCRIVA_TOC" in item.get("insertText", {}).get("text", "")
+                for item in requests
             )
         )

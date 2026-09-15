@@ -29,6 +29,8 @@ FOOTNOTE = "footnote"
 ENDNOTE = "endnote"
 HYPERLINK = "hyperlink"
 BOOKMARK = "bookmark"
+REFERENCE_MARK = "reference-mark"
+REFERENCE_ENTRY = "reference-entry"
 TAB = "tab"
 IMAGE_INLINE = "image-inline"
 
@@ -54,11 +56,28 @@ CONTAINER_BLOCK_TYPES = (
     | LIST_TYPES
     | TABLE_TYPES
     | NOTE_TYPES
-    | {PARAGRAPH, BLOCK_QUOTE, LIST_ITEM, HYPERLINK, BOOKMARK}
+    | {
+        PARAGRAPH,
+        BLOCK_QUOTE,
+        LIST_ITEM,
+        HYPERLINK,
+        BOOKMARK,
+        REFERENCE_MARK,
+        REFERENCE_ENTRY,
+    }
 )
 BLOCK_TYPES = CONTAINER_BLOCK_TYPES | ATOMIC_BLOCK_TYPES
 INLINE_BLOCK_TYPES = frozenset(
-    {FIELD, FOOTNOTE, ENDNOTE, HYPERLINK, BOOKMARK, TAB, IMAGE_INLINE}
+    {
+        FIELD,
+        FOOTNOTE,
+        ENDNOTE,
+        HYPERLINK,
+        BOOKMARK,
+        REFERENCE_MARK,
+        TAB,
+        IMAGE_INLINE,
+    }
 )
 INLINE_ATOMIC_TYPES = frozenset({FIELD, TAB, IMAGE_INLINE})
 
@@ -395,7 +414,7 @@ class DocumentNode:
                 )
             return
 
-        if not self.children and self.type != BOOKMARK:
+        if not self.children and self.type not in {BOOKMARK, REFERENCE_MARK}:
             raise DocumentBuildError(
                 f"Block node '{self.type}' must have at least one child."
             )
@@ -439,6 +458,13 @@ class DocumentNode:
         ):
             raise DocumentBuildError(
                 "A 'bookmark' may contain only text, fields, or tabs."
+            )
+        if self.type == REFERENCE_MARK and any(
+            child.text is None and child.type not in INLINE_ATOMIC_TYPES
+            for child in self.children
+        ):
+            raise DocumentBuildError(
+                "A 'reference-mark' may contain only text, fields, or tabs."
             )
 
     def plain_text(self) -> str:
