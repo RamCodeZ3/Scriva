@@ -10,6 +10,7 @@ from domain.value_objects.apa_structure import APASectionType
 from domain.value_objects.document_node import (
     BOOKMARK,
     BULLETED_LIST,
+    HEADING_1,
     HEADING_2,
     LIST_ITEM,
     MARK_COLOR,
@@ -31,6 +32,7 @@ from infrastructure.export.google_docs_exporter_adapter import (
     GoogleDocsExporterAdapter,
     _document_blocks,
     _second_pass_requests,
+    _table_content_requests,
 )
 
 from tests.test_export_table_of_contents import _document_fixture
@@ -92,6 +94,24 @@ class GoogleDocsExporterResolverTest(unittest.TestCase):
 
 
 class GoogleDocsNodeTreeExporterTest(unittest.TestCase):
+    def test_marks_only_visible_content_headings_for_document_outline(
+        self,
+    ) -> None:
+        document = _document_fixture()
+        blocks = _document_blocks(document)
+        presentation = document.get_section(APASectionType.PRESENTATION)
+        index = document.get_section(APASectionType.INDEX)
+        introduction = document.get_section(APASectionType.INTRODUCTION)
+        body = document.get_section(APASectionType.BODY)
+        assert presentation and index and introduction and body
+
+        by_text = {block.text: block for block in blocks if block.text}
+
+        self.assertIsNone(by_text[presentation.title].node_type)
+        self.assertIsNone(by_text[index.title].node_type)
+        self.assertEqual(by_text[introduction.title].node_type, HEADING_1)
+        self.assertNotIn(body.title, by_text)
+
     def test_builds_content_and_formatting_from_document_nodes(self) -> None:
         document = _document_fixture()
         body = document.get_section(APASectionType.BODY)
@@ -361,6 +381,19 @@ class GoogleDocsNodeTreeExporterTest(unittest.TestCase):
                             ],
                         },
                     },
+                    {
+                        "startIndex": 41,
+                        "endIndex": 55,
+                        "paragraph": {
+                            "paragraphStyle": {
+                                "namedStyleType": "HEADING_3",
+                                "headingId": "third-level-heading",
+                            },
+                            "elements": [
+                                {"textRun": {"content": "Not in TOC\n"}}
+                            ],
+                        },
+                    },
                 ]
             }
         }
@@ -392,3 +425,70 @@ class GoogleDocsNodeTreeExporterTest(unittest.TestCase):
                 self.assertLess(
                     request_range["startIndex"], request_range["endIndex"]
                 )
+
+    def test_cascades_table_row_cell_and_paragraph_styles(self) -> None:
+        table = DocumentNode(
+            type=TABLE,
+            styles={"fontSize": "11pt"},
+            children=(
+                DocumentNode(
+                    type=TABLE_ROW,
+                    styles={"bold": True},
+                    children=(
+                        DocumentNode(
+                            type=TABLE_CELL,
+                            styles={
+                                "fontFamily": "Arial",
+                                "backgroundColor": "yellow",
+                            },
+                            children=(
+                                DocumentNode(
+                                    type=PARAGRAPH,
+                                    styles={"italic": True},
+                                    children=(text_node("Styled cell"),),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        snapshot = {
+            "body": {
+                "content": [
+                    {
+                        "startIndex": 5,
+                        "table": {
+                            "tableRows": [
+                                {
+                                    "tableCells": [
+                                        {"content": [{"startIndex": 8}]}
+                                    ]
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        }
+
+        requests = _table_content_requests(snapshot, [table], {})
+
+        text_styles = [
+            item["updateTextStyle"]["textStyle"]
+            for item in requests
+            if "updateTextStyle" in item
+        ]
+        self.assertTrue(
+            any(
+                style.get("bold")
+                and style.get("italic")
+                and style.get("weightedFontFamily", {}).get("fontFamily")
+                == "Arial"
+                and style.get("fontSize", {}).get("magnitude") == 11.0
+                for style in text_styles
+            )
+        )
+        self.assertTrue(
+            any("updateTableCellStyle" in item for item in requests)
+        )

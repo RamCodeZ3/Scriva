@@ -56,6 +56,42 @@ _BULLET_PRESETS = {
     BULLETED_LIST: "BULLET_DISC_CIRCLE_SQUARE",
     NUMBERED_LIST: "NUMBERED_DECIMAL_ALPHA_ROMAN",
 }
+_HEADING_DEFAULTS: dict[str, dict[str, Any]] = {
+    HEADING_1: {
+        "textAlign": "center",
+        "spaceBefore": "12pt",
+        "spaceAfter": "12pt",
+    },
+    HEADING_2: {
+        "textAlign": "left",
+        "spaceBefore": "12pt",
+        "spaceAfter": "6pt",
+    },
+    HEADING_3: {
+        "textAlign": "left",
+        "spaceBefore": "10pt",
+        "spaceAfter": "6pt",
+    },
+    HEADING_4: {
+        "textAlign": "left",
+        "marginLeft": "36pt",
+        "spaceBefore": "8pt",
+        "spaceAfter": "4pt",
+    },
+    HEADING_5: {
+        "textAlign": "left",
+        "marginLeft": "36pt",
+        "spaceBefore": "8pt",
+        "spaceAfter": "4pt",
+    },
+}
+_HEADING_TEXT_DEFAULTS = {
+    HEADING_1: {"bold": True},
+    HEADING_2: {"bold": True},
+    HEADING_3: {"bold": True, "italic": True},
+    HEADING_4: {"bold": True},
+    HEADING_5: {"bold": True, "italic": True},
+}
 # Google Docs strips private-use Unicode characters. Keep these sentinels
 # ASCII-only so the second pass can always find and replace them.
 _TOC_MARKER = "[[SCRIVA_TOC]]"
@@ -197,7 +233,37 @@ def _document_blocks(document: Document) -> list[_GoogleBlock]:
             # visible document content. This mirrors the DOCX exporter.
             if index == 0 and section.section_type is APASectionType.BODY:
                 continue
-            blocks.extend(_node_blocks(node))
+            node_blocks = _node_blocks(node)
+            if (
+                section.section_type is APASectionType.PRESENTATION
+                and node.type not in {PAGE_BREAK, SECTION_BREAK}
+            ):
+                for block in node_blocks:
+                    block.node_type = None
+                    block.styles = {
+                        "bold": index == 0,
+                        "textAlign": "center",
+                        **(
+                            {
+                                "spaceBefore": "180pt",
+                                "spaceAfter": "36pt",
+                            }
+                            if index == 0
+                            else {"spaceAfter": "6pt"}
+                        ),
+                        **block.styles,
+                    }
+            elif section.section_type is APASectionType.INDEX and index == 0:
+                for block in node_blocks:
+                    block.node_type = None
+                    block.styles = {
+                        "bold": True,
+                        "textAlign": "center",
+                        "spaceBefore": "12pt",
+                        "spaceAfter": "12pt",
+                        **block.styles,
+                    }
+            blocks.extend(node_blocks)
     return blocks
 
 
@@ -365,7 +431,13 @@ def _block_requests(
                 }
             }
         )
-    base_style = _base_text_style(global_styles, block.styles)
+    base_style = _base_text_style(
+        global_styles,
+        {
+            **_HEADING_TEXT_DEFAULTS.get(block.node_type or "", {}),
+            **block.styles,
+        },
+    )
     if block.text and base_style:
         requests.append(
             _text_style_request(1, 1 + len(block.text), base_style)
@@ -404,14 +476,14 @@ def _table_content_requests(
     requests: list[dict[str, Any]] = []
     for table, (structure, table_start) in zip(tables, structures):
         rows = [row for row in table.children if row.type == TABLE_ROW]
-        cells = [
-            cell
+        cell_contexts = [
+            (row, cell)
             for row in rows
             for cell in row.children
             if cell.type == TABLE_CELL
         ]
-        indexed = list(zip(cells, _cell_indexes(structure)))
-        for cell, index in reversed(indexed):
+        indexed = list(zip(cell_contexts, _cell_indexes(structure)))
+        for (row, cell), index in reversed(indexed):
             blocks = [_text_block(child) for child in cell.children]
             text = "\n".join(block.text for block in blocks)
             if not text:
@@ -421,7 +493,14 @@ def _table_content_requests(
             )
             offset = 0
             for block in blocks:
-                base = _base_text_style(global_styles, block.styles)
+                resolved_styles = {
+                    **table.styles,
+                    **row.styles,
+                    **cell.styles,
+                    **_HEADING_TEXT_DEFAULTS.get(block.node_type or "", {}),
+                    **block.styles,
+                }
+                base = _base_text_style(global_styles, resolved_styles)
                 if base and block.text:
                     requests.append(
                         _text_style_request(
@@ -439,7 +518,11 @@ def _table_content_requests(
                     for span in block.spans
                     if span.style
                 )
-                paragraph = _paragraph_style(block, global_styles)
+                styled_block = _GoogleBlock(
+                    node_type=block.node_type,
+                    styles=resolved_styles,
+                )
+                paragraph = _paragraph_style(styled_block, global_styles)
                 if paragraph and block.text:
                     requests.append(
                         {
@@ -518,6 +601,9 @@ def _second_pass_requests(
         # Cover and index headings precede the marker and must never list
         # themselves in the generated TOC.
         headings = _snapshot_headings(snapshot, after_index=toc_position[1])
+        toc_block = next(
+            block for block in blocks if block.node_type == TABLE_OF_CONTENTS
+        )
         text = "".join(f"{heading_text}\n" for _, heading_text, _ in headings)
         relative: list[dict[str, Any]] = []
         offset = 0
@@ -533,12 +619,18 @@ def _second_pass_requests(
                     "updateParagraphStyle": {
                         "range": {"startIndex": offset, "endIndex": end + 1},
                         "paragraphStyle": {
+                            **_paragraph_style(toc_block, {}),
                             "indentStart": {
                                 "magnitude": float((level - 1) * 18),
                                 "unit": "PT",
-                            }
+                            },
                         },
-                        "fields": "indentStart",
+                        "fields": ",".join(
+                            {
+                                *_paragraph_style(toc_block, {}),
+                                "indentStart",
+                            }
+                        ),
                     }
                 }
             )
@@ -638,7 +730,7 @@ def _snapshot_headings(
             continue
         style = paragraph.get("paragraphStyle", {})
         named_style = style.get("namedStyleType", "")
-        if named_style not in _HEADING_STYLES.values():
+        if named_style not in {"HEADING_1", "HEADING_2"}:
             continue
         heading_id = style.get("headingId")
         if not heading_id:
@@ -680,7 +772,11 @@ def _reference_id(node: DocumentNode) -> str:
 def _paragraph_style(
     block: _GoogleBlock, global_styles: dict[str, Any]
 ) -> dict[str, Any]:
-    styles = {**global_styles, **block.styles}
+    styles = {
+        **global_styles,
+        **_HEADING_DEFAULTS.get(block.node_type or "", {}),
+        **block.styles,
+    }
     result: dict[str, Any] = {}
     if block.node_type in _HEADING_STYLES:
         result["namedStyleType"] = _HEADING_STYLES[block.node_type]
