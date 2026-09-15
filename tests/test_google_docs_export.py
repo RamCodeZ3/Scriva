@@ -29,6 +29,8 @@ from infrastructure.export.document_exporter_resolver_adapter import (
 )
 from infrastructure.export.google_docs_exporter_adapter import (
     GoogleDocsExporterAdapter,
+    _document_blocks,
+    _second_pass_requests,
 )
 
 from tests.test_export_table_of_contents import _document_fixture
@@ -179,6 +181,7 @@ class GoogleDocsNodeTreeExporterTest(unittest.TestCase):
         self.assertIn("Styled link\n", inserted_text)
         self.assertIn("First item\n", inserted_text)
         self.assertIn("Second item\n", inserted_text)
+        self.assertNotIn(f"{body.heading.plain_text()}\n", inserted_text)
         self.assertTrue(any("insertTable" in item for item in requests))
         self.assertTrue(any("insertPageBreak" in item for item in requests))
         self.assertEqual(
@@ -198,6 +201,12 @@ class GoogleDocsNodeTreeExporterTest(unittest.TestCase):
         )
         self.assertTrue(
             any(style.get("alignment") == "END" for style in paragraph_styles)
+        )
+        self.assertTrue(
+            any(
+                style.get("namedStyleType") == "NORMAL_TEXT"
+                for style in paragraph_styles
+            )
         )
         text_styles = [
             item["updateTextStyle"]["textStyle"]
@@ -297,7 +306,71 @@ class GoogleDocsNodeTreeExporterTest(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "SCRIVA_TOC" in item.get("insertText", {}).get("text", "")
+                "[[SCRIVA_TOC]]" in item.get("insertText", {}).get("text", "")
                 for item in requests
+            )
+        )
+
+        snapshot = {
+            "body": {
+                "content": [
+                    {
+                        "startIndex": 1,
+                        "endIndex": 7,
+                        "paragraph": {
+                            "paragraphStyle": {
+                                "namedStyleType": "HEADING_1",
+                                "headingId": "index-heading",
+                            },
+                            "elements": [{"textRun": {"content": "Índice\n"}}],
+                        },
+                    },
+                    {
+                        "startIndex": 8,
+                        "endIndex": 23,
+                        "paragraph": {
+                            "paragraphStyle": {
+                                "namedStyleType": "NORMAL_TEXT"
+                            },
+                            "elements": [
+                                {"textRun": {"content": "[[SCRIVA_TOC]]\n"}}
+                            ],
+                        },
+                    },
+                    {
+                        "startIndex": 24,
+                        "endIndex": 38,
+                        "paragraph": {
+                            "paragraphStyle": {
+                                "namedStyleType": "HEADING_1",
+                                "headingId": "intro-heading",
+                            },
+                            "elements": [
+                                {"textRun": {"content": "Introduction\n"}}
+                            ],
+                        },
+                    },
+                ]
+            }
+        }
+
+        second_pass = _second_pass_requests(
+            snapshot, _document_blocks(document)
+        )
+
+        inserted_toc = next(
+            item["insertText"]["text"]
+            for item in second_pass
+            if "insertText" in item
+        )
+        self.assertEqual(inserted_toc, "Introduction\n")
+        self.assertTrue(
+            any(
+                item.get("updateTextStyle", {})
+                .get("textStyle", {})
+                .get("link", {})
+                .get("headingId")
+                == "intro-heading"
+                for item in second_pass
             )
         )

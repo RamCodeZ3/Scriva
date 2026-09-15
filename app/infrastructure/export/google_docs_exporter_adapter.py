@@ -10,7 +10,10 @@ from application.dtos.export_result import ExportResult
 from application.ports.document_exporter_port import DocumentExporterPort
 from domain.entities.document import Document
 from domain.exceptions import DocumentBuildError
-from domain.value_objects.apa_structure import normalize_document_styles
+from domain.value_objects.apa_structure import (
+    APASectionType,
+    normalize_document_styles,
+)
 from domain.value_objects.document_node import (
     BOOKMARK,
     BULLETED_LIST,
@@ -53,8 +56,10 @@ _BULLET_PRESETS = {
     BULLETED_LIST: "BULLET_DISC_CIRCLE_SQUARE",
     NUMBERED_LIST: "NUMBERED_DECIMAL_ALPHA_ROMAN",
 }
-_TOC_MARKER = "\ue000SCRIVA_TOC\ue001"
-_REFERENCE_MARKER = "\ue000SCRIVA_REFERENCE:"
+# Google Docs strips private-use Unicode characters. Keep these sentinels
+# ASCII-only so the second pass can always find and replace them.
+_TOC_MARKER = "[[SCRIVA_TOC]]"
+_REFERENCE_MARKER = "[[SCRIVA_REFERENCE:"
 _NAMED_COLORS = {
     "black": "000000",
     "blue": "0000FF",
@@ -184,12 +189,16 @@ def _get_document(service: Any, document_id: str) -> dict[str, Any]:
 
 
 def _document_blocks(document: Document) -> list[_GoogleBlock]:
-    return [
-        block
-        for section in document.sections
-        for node in section.nodes
-        for block in _node_blocks(node)
-    ]
+    blocks: list[_GoogleBlock] = []
+    for section in document.sections:
+        for index, node in enumerate(section.nodes):
+            # The BODY section heading is structural metadata (normally
+            # "Development"/"Desarrollo"). Other section headings are
+            # visible document content. This mirrors the DOCX exporter.
+            if index == 0 and section.section_type is APASectionType.BODY:
+                continue
+            blocks.extend(_node_blocks(node))
+    return blocks
 
 
 def _node_blocks(node: DocumentNode) -> list[_GoogleBlock]:
@@ -202,7 +211,7 @@ def _node_blocks(node: DocumentNode) -> list[_GoogleBlock]:
     if node.type == REFERENCE_ENTRY:
         return [
             _GoogleBlock(
-                text=f"{_REFERENCE_MARKER}{_reference_id(node)}\ue001",
+                text=f"{_REFERENCE_MARKER}{_reference_id(node)}]]",
                 node_type=node.type,
                 styles=node.styles,
                 source_node=node,
@@ -388,16 +397,16 @@ def _table_content_requests(
     global_styles: dict[str, Any],
 ) -> list[dict[str, Any]]:
     structures = [
-        item["table"]
+        (item["table"], int(item["startIndex"]))
         for item in snapshot.get("body", {}).get("content", [])
         if "table" in item
     ]
     requests: list[dict[str, Any]] = []
-    for table, structure in zip(tables, structures):
+    for table, (structure, table_start) in zip(tables, structures):
+        rows = [row for row in table.children if row.type == TABLE_ROW]
         cells = [
             cell
-            for row in table.children
-            if row.type == TABLE_ROW
+            for row in rows
             for cell in row.children
             if cell.type == TABLE_CELL
         ]
@@ -447,6 +456,39 @@ def _table_content_requests(
                         }
                     )
                 offset += len(block.text) + 1
+        for row_index, row in enumerate(rows):
+            for column_index, cell in enumerate(row.children):
+                background = cell.styles.get(
+                    "backgroundColor",
+                    row.styles.get(
+                        "backgroundColor",
+                        table.styles.get("backgroundColor"),
+                    ),
+                )
+                if background is None and row_index == 0 and len(rows) > 1:
+                    background = "#F5F5F5"
+                color = _color(background)
+                if not color:
+                    continue
+                requests.append(
+                    {
+                        "updateTableCellStyle": {
+                            "tableRange": {
+                                "tableCellLocation": {
+                                    "tableStartLocation": {
+                                        "index": table_start
+                                    },
+                                    "rowIndex": row_index,
+                                    "columnIndex": column_index,
+                                },
+                                "rowSpan": 1,
+                                "columnSpan": 1,
+                            },
+                            "tableCellStyle": {"backgroundColor": color},
+                            "fields": "backgroundColor",
+                        }
+                    }
+                )
     return requests
 
 
@@ -473,7 +515,9 @@ def _second_pass_requests(
     replacements: list[tuple[int, int, str, list[dict[str, Any]]]] = []
     toc_position = _find_marker(runs, _TOC_MARKER)
     if toc_position:
-        headings = _snapshot_headings(snapshot)
+        # Cover and index headings precede the marker and must never list
+        # themselves in the generated TOC.
+        headings = _snapshot_headings(snapshot, after_index=toc_position[1])
         text = "".join(f"{heading_text}\n" for _, heading_text, _ in headings)
         relative: list[dict[str, Any]] = []
         offset = 0
@@ -580,10 +624,12 @@ def _find_marker(
 
 
 def _snapshot_headings(
-    snapshot: dict[str, Any],
+    snapshot: dict[str, Any], *, after_index: int = 0
 ) -> list[tuple[int, str, str]]:
     result = []
     for item in snapshot.get("body", {}).get("content", []):
+        if int(item.get("startIndex", 0)) <= after_index:
+            continue
         paragraph = item.get("paragraph")
         if not paragraph:
             continue
@@ -630,6 +676,11 @@ def _paragraph_style(
     result: dict[str, Any] = {}
     if block.node_type in _HEADING_STYLES:
         result["namedStyleType"] = _HEADING_STYLES[block.node_type]
+    else:
+        # Insertions at index 1 inherit the style of the following paragraph.
+        # Reset it explicitly or body paragraphs following a heading become
+        # headings themselves (and acquire spurious outline bookmarks).
+        result["namedStyleType"] = "NORMAL_TEXT"
     alignment = {
         "LEFT": "START",
         "RIGHT": "END",
