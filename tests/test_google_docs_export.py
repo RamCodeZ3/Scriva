@@ -339,7 +339,18 @@ class GoogleDocsNodeTreeExporterTest(unittest.TestCase):
                     },
                     {
                         "startIndex": 24,
-                        "endIndex": 38,
+                        "endIndex": 25,
+                        "paragraph": {
+                            "paragraphStyle": {
+                                "namedStyleType": "HEADING_1",
+                                "headingId": "empty-heading",
+                            },
+                            "elements": [{"textRun": {"content": "\n"}}],
+                        },
+                    },
+                    {
+                        "startIndex": 26,
+                        "endIndex": 40,
                         "paragraph": {
                             "paragraphStyle": {
                                 "namedStyleType": "HEADING_1",
@@ -374,3 +385,10 @@ class GoogleDocsNodeTreeExporterTest(unittest.TestCase):
                 for item in second_pass
             )
         )
+        for item in second_pass:
+            operation = next(iter(item.values()))
+            request_range = operation.get("range")
+            if request_range:
+                self.assertLess(
+                    request_range["startIndex"], request_range["endIndex"]
+                )

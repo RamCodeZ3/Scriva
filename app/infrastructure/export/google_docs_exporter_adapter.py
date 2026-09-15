@@ -552,6 +552,9 @@ def _second_pass_requests(
         if not position:
             continue
         text = block.source_node.plain_text()
+        if not text:
+            replacements.append((*position, "", []))
+            continue
         relative: list[dict[str, Any]] = [
             {
                 "createNamedRange": {
@@ -645,6 +648,11 @@ def _snapshot_headings(
             element.get("textRun", {}).get("content", "")
             for element in paragraph.get("elements", [])
         ).rstrip("\n")
+        if not text:
+            # Empty paragraphs can retain a heading style after page breaks
+            # or edits in Google Docs. Linking an empty heading produces an
+            # invalid updateTextStyle range (startIndex == endIndex).
+            continue
         result.append((int(named_style[-1]), text, heading_id))
     return result
 
