@@ -17,7 +17,7 @@ class DocumentExporterResolverPort(ABC):
     ) -> DocumentExporterPort:
         """
         Raises `UnsupportedExportTargetError` if `export_target` is
-        unknown, or if it's 'google' and the user has no linked
+        unknown, or if it's 'google_docs' and the user has no linked
         account / the refresh token can't be exchanged.
         """
         raise NotImplementedError

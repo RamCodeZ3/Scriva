@@ -18,6 +18,9 @@ from application.ports.user_repository_port import UserRepositoryPort
 from application.use_cases.augment_document_use_case import (
     AugmentDocumentUseCase,
 )
+from application.use_cases.connect_google_credentials_use_case import (
+    ConnectGoogleCredentialsUseCase,
+)
 from application.use_cases.create_document_use_case import (
     CreateDocumentUseCase,
 )
@@ -192,6 +195,7 @@ def get_document_exporter_resolver() -> DocumentExporterResolverPort:
         pdf_exporter=get_pdf_document_exporter(),
         google_credentials_repository=get_google_credentials_repository(),
         google_token_provider=get_google_oauth_token_provider(),
+        docx_exporter=get_docx_document_exporter(),
     )
 
 
@@ -372,6 +376,15 @@ def get_export_document_use_case(
     return ExportDocumentUseCase(
         document_repository=document_repository,
         exporter_resolver=exporter_resolver,
+    )
+
+
+def get_connect_google_credentials_use_case() -> (
+    ConnectGoogleCredentialsUseCase
+):
+    return ConnectGoogleCredentialsUseCase(
+        credentials=get_google_credentials_repository(),
+        oauth_tokens=get_google_oauth_token_provider(),
     )
 
 
