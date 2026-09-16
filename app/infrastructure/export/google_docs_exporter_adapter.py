@@ -28,8 +28,6 @@ from domain.value_objects.document_node import (
     IMAGE_INLINE,
     NUMBERED_LIST,
     PAGE_BREAK,
-    REFERENCE_ENTRY,
-    REFERENCE_MARK,
     SECTION_BREAK,
     TAB,
     TABLE,
@@ -95,7 +93,6 @@ _HEADING_TEXT_DEFAULTS = {
 # Google Docs strips private-use Unicode characters. Keep these sentinels
 # ASCII-only so the second pass can always find and replace them.
 _TOC_MARKER = "[[SCRIVA_TOC]]"
-_REFERENCE_MARKER = "[[SCRIVA_REFERENCE:"
 _NAMED_COLORS = {
     "black": "000000",
     "blue": "0000FF",
@@ -274,15 +271,6 @@ def _node_blocks(node: DocumentNode) -> list[_GoogleBlock]:
         return [_GoogleBlock(text=_TOC_MARKER, node_type=node.type)]
     if node.type in _HEADING_STYLES and node.metadata.get("meta_only"):
         return []
-    if node.type == REFERENCE_ENTRY:
-        return [
-            _GoogleBlock(
-                text=f"{_REFERENCE_MARKER}{_reference_id(node)}]]",
-                node_type=node.type,
-                styles=node.styles,
-                source_node=node,
-            )
-        ]
     if node.type in {IMAGE, IMAGE_INLINE}:
         blocks = [_GoogleBlock(image_uri=node.src)]
         if node.caption:
@@ -334,13 +322,11 @@ def _inline_content(
             value, style = "\t", {}
         elif node.type == FIELD:
             value, style = str(node.metadata.get("value", "")), {}
-        elif node.type in {HYPERLINK, BOOKMARK, REFERENCE_MARK}:
+        elif node.type in {HYPERLINK, BOOKMARK}:
             nested_link = link
             if node.type == HYPERLINK:
                 url = str(node.metadata.get("url") or "")
                 nested_link = {"url": url} if url else link
-            elif node.type == REFERENCE_MARK:
-                nested_link = {"bookmarkId": _reference_id(node)}
             value, child_spans, child_named = _inline_content(
                 node.children, nested_link
             )
@@ -585,10 +571,7 @@ def _cell_indexes(table: dict[str, Any]) -> list[int]:
 
 
 def _needs_second_pass(blocks: list[_GoogleBlock]) -> bool:
-    return any(
-        block.node_type in {TABLE_OF_CONTENTS, REFERENCE_ENTRY}
-        for block in blocks
-    )
+    return any(block.node_type == TABLE_OF_CONTENTS for block in blocks)
 
 
 def _second_pass_requests(
@@ -636,43 +619,6 @@ def _second_pass_requests(
             )
             offset = end + 1
         replacements.append((*toc_position, text, relative))
-
-    for block in blocks:
-        if block.node_type != REFERENCE_ENTRY or not block.source_node:
-            continue
-        position = _find_marker(runs, block.text)
-        if not position:
-            continue
-        text = block.source_node.plain_text()
-        if not text:
-            replacements.append((*position, "", []))
-            continue
-        relative: list[dict[str, Any]] = [
-            {
-                "createNamedRange": {
-                    "name": _reference_id(block.source_node),
-                    "range": {"startIndex": 0, "endIndex": len(text)},
-                }
-            }
-        ]
-        text_style = _base_text_style({}, block.styles)
-        if text_style and text:
-            relative.append(_text_style_request(0, len(text), text_style))
-        paragraph_style = _paragraph_style(block, {})
-        if paragraph_style and text:
-            relative.append(
-                {
-                    "updateParagraphStyle": {
-                        "range": {
-                            "startIndex": 0,
-                            "endIndex": len(text) + 1,
-                        },
-                        "paragraphStyle": paragraph_style,
-                        "fields": ",".join(paragraph_style),
-                    }
-                }
-            )
-        replacements.append((*position, f"{text}\n", relative))
 
     requests: list[dict[str, Any]] = []
     for start, end, text, relative in sorted(replacements, reverse=True):
@@ -759,14 +705,6 @@ def _offset_request(request: dict[str, Any], offset: int) -> dict[str, Any]:
             "endIndex": payload["range"]["endIndex"] + offset,
         }
     return {operation: payload}
-
-
-def _reference_id(node: DocumentNode) -> str:
-    return str(
-        node.metadata.get("reference_id")
-        or node.metadata.get("referenceId")
-        or node.id
-    )
 
 
 def _paragraph_style(
