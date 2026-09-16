@@ -9,8 +9,8 @@ class DocumentExporterPort(ABC):
     """
     Driven port for turning a finished Document into a real file.
     Adapters:
-      - GoogleDocsExporterAdapter: creates the doc directly in the
-        user's own Drive, applies the APA headings, and shares it.
+      - GoogleDocsExporterAdapter: renders DOCX and converts it to a native
+        document in the user's own Google Drive.
       - PdfDocumentExporterAdapter: renders the document as a
         standalone APA 7 PDF with ReportLab and keeps a copy on the
         server's local disk.

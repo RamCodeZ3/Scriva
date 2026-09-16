@@ -9,6 +9,8 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from requests import RequestException, post
 
+GOOGLE_DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+
 
 class GoogleOAuthTokenProvider(GoogleOAuthTokenPort):
     _TOKEN_URL = "https://oauth2.googleapis.com/token"

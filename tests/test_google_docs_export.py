@@ -2,46 +2,26 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from dataclasses import replace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
-from domain.value_objects.apa_structure import APASectionType
-from domain.value_objects.document_node import (
-    BOOKMARK,
-    BULLETED_LIST,
-    HEADING_1,
-    HEADING_2,
-    LIST_ITEM,
-    MARK_COLOR,
-    MARK_HIGHLIGHT,
-    PARAGRAPH,
-    TABLE,
-    TABLE_CELL,
-    TABLE_OF_CONTENTS,
-    TABLE_ROW,
-    DocumentNode,
-    Mark,
-    hyperlink_node,
-    text_node,
-)
+from application.dtos.export_result import ExportResult
+from domain.exceptions import DocumentBuildError
+from googleapiclient.errors import HttpError
 from infrastructure.export.document_exporter_resolver_adapter import (
     DocumentExporterResolverAdapter,
 )
 from infrastructure.export.google_docs_exporter_adapter import (
+    _DOCX_MIME_TYPE,
+    _GOOGLE_DOC_MIME_TYPE,
     GoogleDocsExporterAdapter,
-    _document_blocks,
-    _second_pass_requests,
-    _table_content_requests,
 )
 
 from tests.test_export_table_of_contents import _document_fixture
 
 
 class GoogleDocsExporterResolverTest(unittest.TestCase):
-    def test_resolves_fresh_credentials_for_every_google_docs_export(
-        self,
-    ) -> None:
+    def test_resolves_fresh_credentials_and_reuses_docx_renderer(self) -> None:
         user_id = uuid4()
         credentials_repository = AsyncMock()
         credentials_repository.get_refresh_token.side_effect = [
@@ -53,10 +33,12 @@ class GoogleDocsExporterResolverTest(unittest.TestCase):
             "access-token-1",
             "access-token-2",
         ]
+        docx_exporter = AsyncMock()
         resolver = DocumentExporterResolverAdapter(
             pdf_exporter=object(),
             google_credentials_repository=credentials_repository,
             google_token_provider=token_provider,
+            docx_exporter=docx_exporter,
         )
 
         first = asyncio.run(resolver.resolve("google_docs", user_id))
@@ -65,6 +47,7 @@ class GoogleDocsExporterResolverTest(unittest.TestCase):
         self.assertIsNot(first, second)
         self.assertEqual(first._credentials.token, "access-token-1")
         self.assertEqual(second._credentials.token, "access-token-2")
+        self.assertIs(first._docx_exporter, docx_exporter)
         self.assertEqual(
             credentials_repository.get_refresh_token.await_args_list,
             [unittest.mock.call(user_id), unittest.mock.call(user_id)],
@@ -93,402 +76,79 @@ class GoogleDocsExporterResolverTest(unittest.TestCase):
         self.assertEqual(exporter._credentials.token, "access")
 
 
-class GoogleDocsNodeTreeExporterTest(unittest.TestCase):
-    def test_marks_only_visible_content_headings_for_document_outline(
-        self,
+class GoogleDocsConversionExporterTest(unittest.TestCase):
+    @patch("infrastructure.export.google_docs_exporter_adapter.build")
+    def test_renders_docx_and_uploads_it_for_native_conversion(
+        self, build: Mock
     ) -> None:
         document = _document_fixture()
-        blocks = _document_blocks(document)
-        presentation = document.get_section(APASectionType.PRESENTATION)
-        index = document.get_section(APASectionType.INDEX)
-        introduction = document.get_section(APASectionType.INTRODUCTION)
-        body = document.get_section(APASectionType.BODY)
-        assert presentation and index and introduction and body
-
-        by_text = {block.text: block for block in blocks if block.text}
-
-        self.assertIsNone(by_text[presentation.title].node_type)
-        self.assertIsNone(by_text[index.title].node_type)
-        self.assertEqual(by_text[introduction.title].node_type, HEADING_1)
-        self.assertNotIn(body.title, by_text)
-
-    def test_builds_content_and_formatting_from_document_nodes(self) -> None:
-        document = _document_fixture()
-        body = document.get_section(APASectionType.BODY)
-        assert body is not None
-        rich_paragraph = DocumentNode(
-            type=PARAGRAPH,
-            styles={"textAlign": "right"},
-            children=(
-                text_node(
-                    "Styled ",
-                    marks=(Mark("bold"), Mark(MARK_COLOR, "#FF0000")),
-                ),
-                hyperlink_node(
-                    (text_node("link"),), "https://example.com/source"
-                ),
-            ),
+        docx_exporter = AsyncMock()
+        docx_exporter.export.return_value = ExportResult(
+            file_bytes=b"docx-content"
         )
-        bullet_list = DocumentNode(
-            type=BULLETED_LIST,
-            children=(
-                DocumentNode(
-                    type=LIST_ITEM,
-                    children=(text_node("First item"),),
-                ),
-                DocumentNode(
-                    type=LIST_ITEM,
-                    children=(text_node("Second item"),),
-                ),
-            ),
-        )
-        table = DocumentNode(
-            type=TABLE,
-            children=(
-                DocumentNode(
-                    type=TABLE_ROW,
-                    children=(
-                        DocumentNode(
-                            type=TABLE_CELL,
-                            children=(
-                                DocumentNode(
-                                    type=PARAGRAPH,
-                                    children=(text_node("Cell A"),),
-                                ),
-                            ),
-                        ),
-                        DocumentNode(
-                            type=TABLE_CELL,
-                            children=(
-                                DocumentNode(
-                                    type=PARAGRAPH,
-                                    children=(text_node("Cell B"),),
-                                ),
-                            ),
-                        ),
-                    ),
-                ),
-            ),
-        )
-        document.sections = [
-            replace(
-                section,
-                body_nodes=(
-                    DocumentNode(
-                        type=HEADING_2,
-                        children=(text_node("Node heading"),),
-                    ),
-                    rich_paragraph,
-                    bullet_list,
-                    table,
-                ),
-            )
-            if section.section_type is APASectionType.BODY
-            else section
-            for section in document.sections
-        ]
+        service = build.return_value
+        create = service.files.return_value.create
+        create.return_value.execute.return_value = {
+            "id": "google-document-id",
+            "webViewLink": "https://docs.google.com/document/d/link/edit",
+        }
+        exporter = GoogleDocsExporterAdapter("access", docx_exporter)
 
-        requests = GoogleDocsExporterAdapter("access")._build_requests(
-            document
-        )
+        result = asyncio.run(exporter.export(document))
 
-        inserted_text = [
-            request["insertText"]["text"]
-            for request in requests
-            if "insertText" in request
-        ]
-        self.assertIn("Node heading\n", inserted_text)
-        self.assertIn("Styled link\n", inserted_text)
-        self.assertIn("First item\n", inserted_text)
-        self.assertIn("Second item\n", inserted_text)
-        self.assertNotIn(f"{body.heading.plain_text()}\n", inserted_text)
-        self.assertTrue(any("insertTable" in item for item in requests))
-        self.assertTrue(any("insertPageBreak" in item for item in requests))
         self.assertEqual(
-            sum("createParagraphBullets" in item for item in requests), 2
+            result.url, "https://docs.google.com/document/d/link/edit"
         )
+        docx_exporter.export.assert_awaited_once_with(document)
+        build.assert_called_once_with(
+            "drive", "v3", credentials=exporter._credentials
+        )
+        call = create.call_args
+        self.assertEqual(
+            call.kwargs["body"],
+            {"name": document.title, "mimeType": _GOOGLE_DOC_MIME_TYPE},
+        )
+        self.assertEqual(call.kwargs["fields"], "id, webViewLink")
+        media = call.kwargs["media_body"]
+        self.assertEqual(media.mimetype(), _DOCX_MIME_TYPE)
+        self.assertTrue(media.resumable())
 
-        paragraph_styles = [
-            item["updateParagraphStyle"]["paragraphStyle"]
-            for item in requests
-            if "updateParagraphStyle" in item
-        ]
-        self.assertTrue(
-            any(
-                style.get("namedStyleType") == "HEADING_2"
-                for style in paragraph_styles
-            )
-        )
-        self.assertTrue(
-            any(style.get("alignment") == "END" for style in paragraph_styles)
-        )
-        self.assertTrue(
-            any(
-                style.get("namedStyleType") == "NORMAL_TEXT"
-                for style in paragraph_styles
-            )
-        )
-        text_styles = [
-            item["updateTextStyle"]["textStyle"]
-            for item in requests
-            if "updateTextStyle" in item
-        ]
-        self.assertTrue(any(style.get("bold") for style in text_styles))
-        self.assertTrue(
-            any(
-                style.get("link", {}).get("url")
-                == "https://example.com/source"
-                for style in text_styles
-            )
-        )
-
-    def test_preserves_highlights_bookmarks_and_meta_only_headings(
-        self,
+    @patch("infrastructure.export.google_docs_exporter_adapter.build")
+    def test_builds_url_when_drive_omits_web_view_link(
+        self, build: Mock
     ) -> None:
-        document = _document_fixture()
-        body = document.get_section(APASectionType.BODY)
-        assert body is not None
-        document.sections = [
-            replace(
-                section,
-                body_nodes=(
-                    DocumentNode(
-                        type=HEADING_2,
-                        metadata={"meta_only": True},
-                        children=(text_node("Internal title"),),
-                    ),
-                    DocumentNode(
-                        type=PARAGRAPH,
-                        children=(
-                            text_node(
-                                "Named",
-                                marks=(Mark(MARK_HIGHLIGHT, "yellow"),),
-                            ),
-                            text_node(
-                                " RGB",
-                                marks=(Mark(MARK_HIGHLIGHT, "rgb(1, 2, 3)"),),
-                            ),
-                            DocumentNode(
-                                type=BOOKMARK,
-                                id="bookmark-1",
-                                children=(text_node(" target"),),
-                            ),
-                        ),
-                    ),
-                ),
-            )
-            if section.section_type is APASectionType.BODY
-            else section
-            for section in document.sections
-        ]
+        execute = (
+            build.return_value.files.return_value.create.return_value.execute
+        )
+        execute.return_value = {"id": "google-document-id"}
+        exporter = GoogleDocsExporterAdapter("access")
 
-        requests = GoogleDocsExporterAdapter("access")._build_requests(
-            document
+        url = exporter._upload_and_convert(_document_fixture(), b"docx")
+
+        self.assertEqual(
+            url,
+            "https://docs.google.com/document/d/google-document-id/edit",
         )
 
-        inserted = [
-            item["insertText"]["text"]
-            for item in requests
-            if "insertText" in item
-        ]
-        self.assertNotIn("Internal title\n", inserted)
-        highlight_styles = [
-            item["updateTextStyle"]["textStyle"]
-            for item in requests
-            if "updateTextStyle" in item
-            and "backgroundColor" in item["updateTextStyle"]["textStyle"]
-        ]
-        self.assertEqual(len(highlight_styles), 2)
-        self.assertTrue(
-            any(
-                item.get("createNamedRange", {}).get("name") == "bookmark-1"
-                for item in requests
-            )
+    @patch("infrastructure.export.google_docs_exporter_adapter.build")
+    def test_requests_reauthorization_for_missing_drive_scope(
+        self, build: Mock
+    ) -> None:
+        response = Mock(status=403, reason="Forbidden")
+        error = HttpError(response, b'{"error": {"message": "forbidden"}}')
+        execute = (
+            build.return_value.files.return_value.create.return_value.execute
         )
+        execute.side_effect = error
+        exporter = GoogleDocsExporterAdapter("access")
 
-    def test_keeps_toc_placeholder_for_the_second_pass(self) -> None:
-        document = _document_fixture()
-        body = document.get_section(APASectionType.BODY)
-        assert body is not None
-        document.sections = [
-            replace(
-                section,
-                body_nodes=(DocumentNode(type=TABLE_OF_CONTENTS),),
-            )
-            if section.section_type is APASectionType.BODY
-            else section
-            for section in document.sections
-        ]
+        with self.assertRaisesRegex(DocumentBuildError, "drive.file scope"):
+            exporter._upload_and_convert(_document_fixture(), b"docx")
 
-        requests = GoogleDocsExporterAdapter("access")._build_requests(
-            document
-        )
+    def test_rejects_empty_docx_render_result(self) -> None:
+        docx_exporter = AsyncMock()
+        docx_exporter.export.return_value = ExportResult(file_bytes=None)
+        exporter = GoogleDocsExporterAdapter("access", docx_exporter)
 
-        self.assertTrue(
-            any(
-                "[[SCRIVA_TOC]]" in item.get("insertText", {}).get("text", "")
-                for item in requests
-            )
-        )
-
-        snapshot = {
-            "body": {
-                "content": [
-                    {
-                        "startIndex": 1,
-                        "endIndex": 7,
-                        "paragraph": {
-                            "paragraphStyle": {
-                                "namedStyleType": "HEADING_1",
-                                "headingId": "index-heading",
-                            },
-                            "elements": [{"textRun": {"content": "Índice\n"}}],
-                        },
-                    },
-                    {
-                        "startIndex": 8,
-                        "endIndex": 23,
-                        "paragraph": {
-                            "paragraphStyle": {
-                                "namedStyleType": "NORMAL_TEXT"
-                            },
-                            "elements": [
-                                {"textRun": {"content": "[[SCRIVA_TOC]]\n"}}
-                            ],
-                        },
-                    },
-                    {
-                        "startIndex": 24,
-                        "endIndex": 25,
-                        "paragraph": {
-                            "paragraphStyle": {
-                                "namedStyleType": "HEADING_1",
-                                "headingId": "empty-heading",
-                            },
-                            "elements": [{"textRun": {"content": "\n"}}],
-                        },
-                    },
-                    {
-                        "startIndex": 26,
-                        "endIndex": 40,
-                        "paragraph": {
-                            "paragraphStyle": {
-                                "namedStyleType": "HEADING_1",
-                                "headingId": "intro-heading",
-                            },
-                            "elements": [
-                                {"textRun": {"content": "Introduction\n"}}
-                            ],
-                        },
-                    },
-                    {
-                        "startIndex": 41,
-                        "endIndex": 55,
-                        "paragraph": {
-                            "paragraphStyle": {
-                                "namedStyleType": "HEADING_3",
-                                "headingId": "third-level-heading",
-                            },
-                            "elements": [
-                                {"textRun": {"content": "Not in TOC\n"}}
-                            ],
-                        },
-                    },
-                ]
-            }
-        }
-
-        second_pass = _second_pass_requests(
-            snapshot, _document_blocks(document)
-        )
-
-        inserted_toc = next(
-            item["insertText"]["text"]
-            for item in second_pass
-            if "insertText" in item
-        )
-        self.assertEqual(inserted_toc, "Introduction\n")
-        self.assertTrue(
-            any(
-                item.get("updateTextStyle", {})
-                .get("textStyle", {})
-                .get("link", {})
-                .get("headingId")
-                == "intro-heading"
-                for item in second_pass
-            )
-        )
-        for item in second_pass:
-            operation = next(iter(item.values()))
-            request_range = operation.get("range")
-            if request_range:
-                self.assertLess(
-                    request_range["startIndex"], request_range["endIndex"]
-                )
-
-    def test_cascades_table_row_cell_and_paragraph_styles(self) -> None:
-        table = DocumentNode(
-            type=TABLE,
-            styles={"fontSize": "11pt"},
-            children=(
-                DocumentNode(
-                    type=TABLE_ROW,
-                    styles={"bold": True},
-                    children=(
-                        DocumentNode(
-                            type=TABLE_CELL,
-                            styles={
-                                "fontFamily": "Arial",
-                                "backgroundColor": "yellow",
-                            },
-                            children=(
-                                DocumentNode(
-                                    type=PARAGRAPH,
-                                    styles={"italic": True},
-                                    children=(text_node("Styled cell"),),
-                                ),
-                            ),
-                        ),
-                    ),
-                ),
-            ),
-        )
-        snapshot = {
-            "body": {
-                "content": [
-                    {
-                        "startIndex": 5,
-                        "table": {
-                            "tableRows": [
-                                {
-                                    "tableCells": [
-                                        {"content": [{"startIndex": 8}]}
-                                    ]
-                                }
-                            ]
-                        },
-                    }
-                ]
-            }
-        }
-
-        requests = _table_content_requests(snapshot, [table], {})
-
-        text_styles = [
-            item["updateTextStyle"]["textStyle"]
-            for item in requests
-            if "updateTextStyle" in item
-        ]
-        self.assertTrue(
-            any(
-                style.get("bold")
-                and style.get("italic")
-                and style.get("weightedFontFamily", {}).get("fontFamily")
-                == "Arial"
-                and style.get("fontSize", {}).get("magnitude") == 11.0
-                for style in text_styles
-            )
-        )
-        self.assertTrue(
-            any("updateTableCellStyle" in item for item in requests)
-        )
+        with self.assertRaisesRegex(DocumentBuildError, "no file content"):
+            asyncio.run(exporter.export(_document_fixture()))

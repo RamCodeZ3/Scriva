@@ -195,6 +195,7 @@ def get_document_exporter_resolver() -> DocumentExporterResolverPort:
         pdf_exporter=get_pdf_document_exporter(),
         google_credentials_repository=get_google_credentials_repository(),
         google_token_provider=get_google_oauth_token_provider(),
+        docx_exporter=get_docx_document_exporter(),
     )
 
 

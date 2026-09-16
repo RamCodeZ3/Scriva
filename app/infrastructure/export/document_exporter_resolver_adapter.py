@@ -27,10 +27,12 @@ class DocumentExporterResolverAdapter(DocumentExporterResolverPort):
         pdf_exporter: PdfDocumentExporterAdapter,
         google_credentials_repository: GoogleCredentialsPort,
         google_token_provider: GoogleOAuthTokenPort,
+        docx_exporter: DocumentExporterPort | None = None,
     ) -> None:
         self._pdf_exporter = pdf_exporter
         self._google_credentials_repository = google_credentials_repository
         self._google_token_provider = google_token_provider
+        self._docx_exporter = docx_exporter or DocxDocumentExporterAdapter()
 
     async def resolve(
         self, export_target: str, user_id: UUID
@@ -51,10 +53,13 @@ class DocumentExporterResolverAdapter(DocumentExporterResolverPort):
             access_token = await self._google_token_provider.get_access_token(
                 refresh_token
             )
-            return GoogleDocsExporterAdapter(user_access_token=access_token)
+            return GoogleDocsExporterAdapter(
+                user_access_token=access_token,
+                docx_exporter=self._docx_exporter,
+            )
 
         if export_target == "docx":
-            return DocxDocumentExporterAdapter()
+            return self._docx_exporter
 
         raise UnsupportedExportTargetError(
             f"Unknown export target '{export_target}'."

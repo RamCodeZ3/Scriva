@@ -30,7 +30,8 @@ Turn raw, unstructured source material into a fully structured, properly cited d
 - **Gemini API** — Processes extracted sources and automatically drafts the structured document content (presentation, table of contents, body, etc.) under APA 7 rules.
 - **FastAPI** — Exposes the REST API endpoints for receiving document-generation requests and managing backend processing state.
 - **Playwright** — Extracts text and relevant content from web pages, including dynamic, JavaScript-rendered sites.
-- **Google Docs API** — Creates, formats, and exports the final document with the requested layout and styling.
+- **Google Drive API** — Converts the generated DOCX into a native Google
+  Docs document in the user's Drive.
 - **Supabase** — Stores the user database, source metadata, and processing status records.
 - **DiskCache** — Stores compiled DOCX binaries on local disk with content-addressed keys and LRU eviction.
 - **reportlab** — Generates PDF output for the final documents.
@@ -40,6 +41,13 @@ Turn raw, unstructured source material into a fully structured, properly cited d
 Whisper uses the multilingual `base` model by default. Set `WHISPER_MODEL` to
 another installed model name or `WHISPER_DEVICE` to `cpu` or `cuda` when an
 explicit runtime device is required. FFmpeg must be available on `PATH`.
+
+Google Docs export requires the OAuth scope
+`https://www.googleapis.com/auth/drive.file`. The client that starts the
+Google authorization flow must request offline access and explicit consent
+with this scope. Refresh tokens issued before this scope was added must be
+re-authorized; the export endpoint reports this requirement when Drive
+returns HTTP 403.
 
 Document creation and AI augmentation continue to accept their existing JSON
 bodies. To include local files, send `multipart/form-data` with `payload`
