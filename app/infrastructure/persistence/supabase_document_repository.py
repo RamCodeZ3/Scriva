@@ -248,7 +248,12 @@ def _sections_from_children(children: list) -> list[APASection]:
     next_section_index = 0
     for raw_node in children:
         node = DocumentNode.from_dict(raw_node)
-        if node.type == "heading-1":
+        starts_section = node.type == "heading-1" and (
+            current_section is None
+            or node.section_type is None
+            or APASectionType(node.section_type) is not current_section
+        )
+        if starts_section:
             if node.section_type is not None:
                 current_section = APASectionType(node.section_type)
                 next_section_index = (

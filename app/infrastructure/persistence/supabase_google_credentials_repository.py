@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID
 
+from application.ports.google_credentials_port import GoogleCredentialsPort
 from cryptography.fernet import Fernet, InvalidToken
 from supabase import Client
-
-from application.ports.google_credentials_port import GoogleCredentialsPort
 
 
 class SupabaseGoogleCredentialsRepository(GoogleCredentialsPort):
@@ -15,6 +14,12 @@ class SupabaseGoogleCredentialsRepository(GoogleCredentialsPort):
     def __init__(self, client: Client, encryption_key: str) -> None:
         self._client = client
         self._fernet = Fernet(encryption_key.encode())
+
+    async def save_refresh_token(
+        self, user_id: UUID, refresh_token: str
+    ) -> None:
+        encrypted = self._fernet.encrypt(refresh_token.encode()).decode()
+        await asyncio.to_thread(self._save_row_sync, str(user_id), encrypted)
 
     async def get_refresh_token(self, user_id: UUID) -> str | None:
         row = await asyncio.to_thread(self._get_row_sync, str(user_id))
@@ -40,3 +45,16 @@ class SupabaseGoogleCredentialsRepository(GoogleCredentialsPort):
             .execute()
         )
         return result.data if result and result.data else None
+
+    def _save_row_sync(self, user_id: str, encrypted_token: str) -> None:
+        (
+            self._client.table(self._TABLE)
+            .upsert(
+                {
+                    "user_id": user_id,
+                    "encrypted_refresh_token": encrypted_token,
+                },
+                on_conflict="user_id",
+            )
+            .execute()
+        )

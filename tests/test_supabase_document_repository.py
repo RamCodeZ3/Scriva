@@ -173,6 +173,33 @@ class SupabaseDocumentRepositoryMappingTest(unittest.TestCase):
             )
         )
 
+    def test_preserves_content_heading_one_within_its_section(self) -> None:
+        row = self.repository._to_row(self.document)
+        row["node_tree"]["children"] = [
+            {
+                "type": "heading-1",
+                "section_type": "body",
+                "children": [{"text": "Development"}],
+            },
+            {
+                "type": "heading-1",
+                "section_type": "body",
+                "children": [{"text": "First topic"}],
+            },
+            {
+                "type": "heading-2",
+                "section_type": "body",
+                "children": [{"text": "Subtopic"}],
+            },
+        ]
+
+        restored = asyncio.run(self.repository._to_entity(row))
+
+        self.assertEqual(
+            [node.type for node in restored.sections[0].body_nodes],
+            ["heading-1", "heading-2"],
+        )
+
 
 class _EmptySourceRepository:
     async def get_by_id(self, source_id):
