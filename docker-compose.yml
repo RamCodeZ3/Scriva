@@ -1,0 +1,24 @@
+services:
+  scriva:
+    build: .
+    container_name: scriva
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # defaults to cpu; only switch to cuda if you have a GPU +
+      # the nvidia-container-toolkit installed
+      WHISPER_DEVICE: cpu
+    volumes:
+      # cache the Whisper model and the DiskCache store across restarts
+      - whisper_cache:/root/.cache/whisper
+      - disk_cache:/app/.cache
+    # Whisper/Playwright handle uploaded files via /dev/shm; Docker's
+    # default limit (64 MB) is too small for larger audio/video uploads.
+    shm_size: "1gb"
+    restart: unless-stopped
+
+volumes:
+  whisper_cache:
+  disk_cache:
