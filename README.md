@@ -35,6 +35,8 @@ Turn raw, unstructured source material into a fully structured, properly cited d
 - **Supabase** — Stores the user database, source metadata, and processing status records.
 - **DiskCache** — Stores compiled DOCX binaries on local disk with content-addressed keys and LRU eviction.
 - **reportlab** — Generates PDF output for the final documents.
+- **ODFpy** — Generates editable ODT output with document formatting and
+  navigation preserved.
 - **youtube-transcript-api** — Retrieves transcripts from YouTube videos as a source input.
 - **OpenAI Whisper** — Transcribes local audio and video files supported by FFmpeg.
 
