@@ -16,6 +16,9 @@ from infrastructure.export.docx_document_exporter_adapter import (
 from infrastructure.export.google_docs_exporter_adapter import (
     GoogleDocsExporterAdapter,
 )
+from infrastructure.export.odt_document_exporter_adapter import (
+    OdtDocumentExporterAdapter,
+)
 from infrastructure.export.pdf_document_exporter_adapter import (
     PdfDocumentExporterAdapter,
 )
@@ -28,11 +31,13 @@ class DocumentExporterResolverAdapter(DocumentExporterResolverPort):
         google_credentials_repository: GoogleCredentialsPort,
         google_token_provider: GoogleOAuthTokenPort,
         docx_exporter: DocumentExporterPort | None = None,
+        odt_exporter: DocumentExporterPort | None = None,
     ) -> None:
         self._pdf_exporter = pdf_exporter
         self._google_credentials_repository = google_credentials_repository
         self._google_token_provider = google_token_provider
         self._docx_exporter = docx_exporter or DocxDocumentExporterAdapter()
+        self._odt_exporter = odt_exporter or OdtDocumentExporterAdapter()
 
     async def resolve(
         self, export_target: str, user_id: UUID
@@ -60,6 +65,9 @@ class DocumentExporterResolverAdapter(DocumentExporterResolverPort):
 
         if export_target == "docx":
             return self._docx_exporter
+
+        if export_target == "odt":
+            return self._odt_exporter
 
         raise UnsupportedExportTargetError(
             f"Unknown export target '{export_target}'."

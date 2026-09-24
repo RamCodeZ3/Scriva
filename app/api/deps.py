@@ -65,6 +65,9 @@ from infrastructure.export.document_exporter_resolver_adapter import (
 from infrastructure.export.docx_document_exporter_adapter import (
     DocxDocumentExporterAdapter,
 )
+from infrastructure.export.odt_document_exporter_adapter import (
+    OdtDocumentExporterAdapter,
+)
 from infrastructure.export.pdf_document_exporter_adapter import (
     PdfDocumentExporterAdapter,
 )
@@ -176,6 +179,11 @@ def get_docx_document_exporter() -> DocxDocumentExporterAdapter:
 
 
 @lru_cache
+def get_odt_document_exporter() -> OdtDocumentExporterAdapter:
+    return OdtDocumentExporterAdapter()
+
+
+@lru_cache
 def get_document_parser() -> DocumentParserPort:
     return DocxDocumentParserAdapter()
 
@@ -196,6 +204,7 @@ def get_document_exporter_resolver() -> DocumentExporterResolverPort:
         google_credentials_repository=get_google_credentials_repository(),
         google_token_provider=get_google_oauth_token_provider(),
         docx_exporter=get_docx_document_exporter(),
+        odt_exporter=get_odt_document_exporter(),
     )
 
 
