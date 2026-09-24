@@ -191,6 +191,9 @@ _SYSTEM_INSTRUCTION = (
     "student name, institution, subject/course, professor, student ID (if "
     "provided), and today's date — as separate 'paragraph' nodes (one "
     "field per paragraph), in the source's language, exactly as given. "
+    "Values enclosed in angle brackets, such as <professor>, are "
+    "intentional editable placeholders: reproduce them literally in their "
+    "own paragraph; never omit, translate, or replace them. "
     "Each paragraph must contain ONLY the field's plain value, with NO "
     'label or prefix of any kind — write "Aram Musset", never "Nombre: '
     'Aram Musset" or "Student: Aram Musset"; write "Universidad XYZ", '
@@ -494,7 +497,7 @@ Required sections, in this exact order: {section_names}.
 
 Presentation/cover page data — the 'presentation' section's nodes must
 restate exactly these fields, one per paragraph, and nothing else:
-{presentation}
+{_presentation_prompt_data(presentation)}
 
 Respond with a single JSON object shaped exactly like this:
 {_RESPONSE_SHAPE_HINT}
@@ -749,6 +752,22 @@ def _clean_notes(additional_notes: str | None) -> str:
         if additional_notes and additional_notes.strip()
         else "None"
     )
+
+
+def _presentation_prompt_data(presentation: PresentationInfo) -> str:
+    fields = [
+        ("student_name", presentation.student_name),
+        ("institution", presentation.institution),
+    ]
+    if presentation.subject is not None:
+        fields.append(("subject", presentation.subject))
+    fields.extend(
+        (
+            ("professor", presentation.professor),
+            ("student_id", presentation.student_id),
+        )
+    )
+    return "\n".join(f"- {name}: {value}" for name, value in fields)
 
 
 def _parse_global_style(data: dict) -> dict[str, Any]:

@@ -7,9 +7,9 @@ class CreateDocumentRequest(BaseModel):
     user: str = Field(..., min_length=1)
     document_type: str
     sources: list[str] = Field(..., min_length=1)
-    professor: str = Field(..., min_length=1)
-    student_id: str = Field(..., min_length=1)
-    institution: str = Field(..., min_length=1)
+    professor: str | None = None
+    student_id: str | None = None
+    institution: str | None = None
     subject: str | None = None
     additional_notes: str | None = None
 
