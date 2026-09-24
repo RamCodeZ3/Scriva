@@ -14,6 +14,9 @@ from domain.value_objects.document_node import (
     MARK_HIGHLIGHT,
     MARK_LINK,
     PARAGRAPH,
+    TABLE,
+    TABLE_CELL,
+    TABLE_ROW,
     DocumentNode,
     Mark,
     text_node,
@@ -68,8 +71,80 @@ class OdtDocumentExporterTest(unittest.TestCase):
         self.assertIn("Introducción", content)
         self.assertIn("Tema principal", content)
         self.assertRegex(content, r"Tema principal</text:a>.*?[1-9]")
+        self.assertIn('style:type="right"', content)
+        self.assertIn('style:leader-style="dotted"', content)
         self.assertIn("text:page-number", styles)
         self.assertIn('style:master-page-name="Scriva"', styles)
+
+    def test_declares_table_grid_and_preserves_columns(self) -> None:
+        document = _document_fixture()
+        table_node = DocumentNode(
+            type=TABLE,
+            children=(
+                DocumentNode(
+                    type=TABLE_ROW,
+                    children=(
+                        DocumentNode(
+                            type=TABLE_CELL,
+                            children=(
+                                DocumentNode(
+                                    type=PARAGRAPH,
+                                    children=(text_node("First heading"),),
+                                ),
+                            ),
+                        ),
+                        DocumentNode(
+                            type=TABLE_CELL,
+                            children=(
+                                DocumentNode(
+                                    type=PARAGRAPH,
+                                    children=(text_node("Second heading"),),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                DocumentNode(
+                    type=TABLE_ROW,
+                    children=(
+                        DocumentNode(
+                            type=TABLE_CELL,
+                            children=(
+                                DocumentNode(
+                                    type=PARAGRAPH,
+                                    children=(text_node("Left"),),
+                                ),
+                            ),
+                        ),
+                        DocumentNode(
+                            type=TABLE_CELL,
+                            children=(
+                                DocumentNode(
+                                    type=PARAGRAPH,
+                                    children=(text_node("Right"),),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        document.sections = [
+            replace(section, body_nodes=(table_node,))
+            if section.section_type is APASectionType.INTRODUCTION
+            else section
+            for section in document.sections
+        ]
+
+        content = OdtDocumentExporterAdapter()._build_sync(document)
+        with ZipFile(BytesIO(content)) as archive:
+            xml = archive.read("content.xml").decode("utf-8")
+
+        self.assertIn('table:number-columns-repeated="2"', xml)
+        self.assertIn("First heading", xml)
+        self.assertIn("Second heading", xml)
+        self.assertIn("Left", xml)
+        self.assertIn("Right", xml)
 
     def test_preserves_inline_marks_and_links(self) -> None:
         document = _document_fixture()

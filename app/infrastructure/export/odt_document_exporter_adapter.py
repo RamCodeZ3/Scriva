@@ -161,8 +161,9 @@ class OdtDocumentExporterAdapter(DocumentExporterPort):
                 toc_styles = toc_node.styles
         for level, title, page_number, bookmark in entries:
             paragraph = text.P(
-                stylename=context.paragraph_style(
-                    {**toc_styles, "marginLeft": f"{level * 18}pt"}
+                stylename=context.toc_paragraph_style(
+                    {**toc_styles, "marginLeft": f"{level * 18}pt"},
+                    level,
                 )
             )
             link = text.A(href=f"#{bookmark}")
@@ -358,6 +359,29 @@ class _Context:
         self.odt.automaticstyles.addElement(item)
         return item
 
+    def toc_paragraph_style(self, values: dict, level: int) -> style.Style:
+        item = self.paragraph_style(values)
+        paragraph_properties = next(
+            child
+            for child in item.childNodes
+            if child.qname
+            == (
+                "urn:oasis:names:tc:opendocument:xmlns:style:1.0",
+                "paragraph-properties",
+            )
+        )
+        tab_stops = style.TabStops()
+        tab_stops.addElement(
+            style.TabStop(
+                position=f"{max(self.content_width_pt - level * 18, 0):g}pt",
+                type="right",
+                leaderstyle="dotted",
+                leadertext=".",
+            )
+        )
+        paragraph_properties.addElement(tab_stops)
+        return item
+
     def text_style(self, values: dict) -> style.Style:
         self._style_sequence += 1
         item = style.Style(name=f"Text{self._style_sequence}", family="text")
@@ -374,6 +398,12 @@ class _Context:
         if self.document_styles.get("orientation") == "landscape":
             page_width, page_height = page_height, page_width
         margins = self.document_styles["pageMargin"]
+        self.content_width_pt = max(
+            _length_pt(page_width)
+            - _length_pt(margins.get("left"), 72)
+            - _length_pt(margins.get("right"), 72),
+            0,
+        )
         layout = style.PageLayout(name="ScrivaPage")
         layout.addElement(
             style.PageLayoutProperties(
@@ -527,9 +557,25 @@ def _render_table(
     container, node: DocumentNode, context: _Context, inherited: dict
 ) -> None:
     rendered = table.Table()
+    column_count = max(
+        (
+            sum(cell.col_span or 1 for cell in row.children)
+            for row in node.children
+        ),
+        default=0,
+    )
+    if column_count == 0:
+        raise DocumentBuildError("A 'table' node has no cells.")
+    rendered.addElement(table.TableColumn(numbercolumnsrepeated=column_count))
+    row_spans = [0] * column_count
     for row_index, row_node in enumerate(node.children):
         row = table.TableRow()
+        column_index = 0
         for cell_node in row_node.children:
+            while column_index < column_count and row_spans[column_index] > 0:
+                row.addElement(table.CoveredTableCell())
+                row_spans[column_index] -= 1
+                column_index += 1
             cell_values = {**inherited, **row_node.styles, **cell_node.styles}
             cell_style = style.Style(
                 name=f"TableCell{context._style_sequence}", family="table-cell"
@@ -558,6 +604,27 @@ def _render_table(
             for child in cell_node.children:
                 _render_block(cell, child, context, cell_values)
             row.addElement(cell)
+            col_span = cell_node.col_span or 1
+            row_span = cell_node.row_span or 1
+            if column_index + col_span > column_count:
+                raise DocumentBuildError(
+                    "A table row contains more columns than its table grid."
+                )
+            if row_span > 1:
+                for covered_index in range(
+                    column_index, column_index + col_span
+                ):
+                    row_spans[covered_index] = row_span - 1
+            for _ in range(col_span - 1):
+                row.addElement(table.CoveredTableCell())
+            column_index += col_span
+        while column_index < column_count:
+            if row_spans[column_index] > 0:
+                row.addElement(table.CoveredTableCell())
+                row_spans[column_index] -= 1
+            else:
+                row.addElement(table.TableCell())
+            column_index += 1
         rendered.addElement(row)
     container.addElement(rendered)
     if node.caption:
@@ -683,6 +750,27 @@ def _length(value, default: str | None) -> str | None:
     if re.fullmatch(r"-?\d+(?:\.\d+)?", raw):
         return f"{raw}pt"
     return raw
+
+
+def _length_pt(value, default: float = 0) -> float:
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = re.fullmatch(
+        r"(-?\d+(?:\.\d+)?)\s*(pt|in|cm|mm)?", str(value).strip()
+    )
+    if match is None:
+        return default
+    amount = float(match.group(1))
+    factors = {
+        None: 1,
+        "pt": 1,
+        "in": 72,
+        "cm": 72 / 2.54,
+        "mm": 72 / 25.4,
+    }
+    return amount * factors[match.group(2)]
 
 
 def _line_height(value) -> str:
