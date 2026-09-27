@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import replace as _with_replaced
+from datetime import date
 from typing import Any
 
 from application.ports.document_writer_port import DocumentWriterPort
@@ -765,6 +766,7 @@ def _presentation_prompt_data(presentation: PresentationInfo) -> str:
         (
             ("professor", presentation.professor),
             ("student_id", presentation.student_id),
+            ("date", date.today().isoformat()),
         )
     )
     return "\n".join(f"- {name}: {value}" for name, value in fields)

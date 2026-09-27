@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import date
 
 from api.schemas.documents import CreateDocumentRequest
 from domain.value_objects.document_type import DocumentType
@@ -51,6 +52,19 @@ class PresentationInfoTest(unittest.TestCase):
         self.assertIn("- professor: <professor>", prompt)
         self.assertIn("- student_id: <student_id>", prompt)
         self.assertIn("- institution: <institution>", prompt)
+
+    def test_prompt_includes_current_date_for_cover_page(self) -> None:
+        adapter = object.__new__(GeminiDocumentWriterAdapter)
+
+        prompt = adapter._build_prompt(
+            source_content="Source text",
+            title="Working title",
+            document_type=DocumentType.REPORT,
+            presentation=PresentationInfo(student_name="Student"),
+            additional_notes=None,
+        )
+
+        self.assertIn(f"- date: {date.today().isoformat()}", prompt)
 
     def test_real_values_are_trimmed_and_preserved(self) -> None:
         presentation = PresentationInfo(
