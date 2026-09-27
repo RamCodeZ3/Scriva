@@ -36,7 +36,15 @@ _YOUTUBE_RE = re.compile(
 )
 _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
-_DOCUMENT_EXTS = {".pdf", ".docx", ".doc", ".txt", ".odt", ".rtf"}
+_DOCUMENT_EXTS = {
+    ".pdf",
+    ".docx",
+    ".doc",
+    ".txt",
+    ".odt",
+    ".rtf",
+    ".pptx",
+}
 _VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
 
