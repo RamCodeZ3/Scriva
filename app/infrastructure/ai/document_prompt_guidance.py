@@ -60,6 +60,46 @@ SECTION_GUIDANCE: dict[tuple[DocumentType, APASectionType], str] = {
         APASectionType.CONCLUSION,
     ): "Answer the guiding question without introducing new information.",
     (DocumentType.RESEARCH, APASectionType.SOURCES): "APA 7 references.",
+    (DocumentType.SUMMARY, APASectionType.PRESENTATION): "Compact header.",
+    (
+        DocumentType.SUMMARY,
+        APASectionType.KEY_POINTS,
+    ): "List three to seven key points.",
+    (
+        DocumentType.SUMMARY,
+        APASectionType.BODY,
+    ): "Write a faithful, shorter prose summary without personal opinion.",
+    (DocumentType.SUMMARY, APASectionType.SOURCES): "APA 7 references.",
+    (DocumentType.SYNTHESIS, APASectionType.PRESENTATION): "Title page.",
+    (
+        DocumentType.SYNTHESIS,
+        APASectionType.INTRODUCTION,
+    ): "State the topic and the criterion used to integrate the sources.",
+    (
+        DocumentType.SYNTHESIS,
+        APASectionType.BODY,
+    ): "Organize by theme rather than by source, showing agreements, "
+    "contrasts, and gaps. A comparison table may be used.",
+    (
+        DocumentType.SYNTHESIS,
+        APASectionType.CONCLUSION,
+    ): "Conclude the integrated source-supported analysis without new facts.",
+    (DocumentType.SYNTHESIS, APASectionType.SOURCES): "APA 7 references.",
+    (DocumentType.BRIEF, APASectionType.PRESENTATION): "Title page.",
+    (
+        DocumentType.BRIEF,
+        APASectionType.KEY_POINTS,
+    ): "Write a concise executive summary oriented to a decision.",
+    (
+        DocumentType.BRIEF,
+        APASectionType.BODY,
+    ): "Give concise context and analysis grounded in the sources.",
+    (
+        DocumentType.BRIEF,
+        APASectionType.RECOMMENDATIONS,
+    ): "Use a numbered list. Every recommendation must derive from the "
+    "sources; otherwise omit this section.",
+    (DocumentType.BRIEF, APASectionType.SOURCES): "APA 7 references.",
 }
 
 

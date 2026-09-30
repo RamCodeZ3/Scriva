@@ -114,6 +114,38 @@ BLUEPRINTS: dict[DocumentType, DocumentBlueprint] = {
             SectionSpec(APASectionType.SOURCES),
         ),
     ),
+    DocumentType.SUMMARY: DocumentBlueprint(
+        document_type=DocumentType.SUMMARY,
+        sections=(
+            SectionSpec(APASectionType.PRESENTATION, required=False),
+            SectionSpec(APASectionType.KEY_POINTS, required=False),
+            SectionSpec(APASectionType.BODY),
+            SectionSpec(APASectionType.SOURCES),
+        ),
+        style_overrides={"lineHeight": 1.5},
+    ),
+    DocumentType.SYNTHESIS: DocumentBlueprint(
+        document_type=DocumentType.SYNTHESIS,
+        sections=(
+            SectionSpec(APASectionType.PRESENTATION),
+            SectionSpec(APASectionType.INTRODUCTION),
+            SectionSpec(APASectionType.BODY),
+            SectionSpec(APASectionType.CONCLUSION),
+            SectionSpec(APASectionType.SOURCES),
+        ),
+        style_overrides={"lineHeight": 1.5},
+    ),
+    DocumentType.BRIEF: DocumentBlueprint(
+        document_type=DocumentType.BRIEF,
+        sections=(
+            SectionSpec(APASectionType.PRESENTATION),
+            SectionSpec(APASectionType.KEY_POINTS),
+            SectionSpec(APASectionType.BODY),
+            SectionSpec(APASectionType.RECOMMENDATIONS, required=False),
+            SectionSpec(APASectionType.SOURCES),
+        ),
+        style_overrides={"lineHeight": 1.5},
+    ),
 }
 
 

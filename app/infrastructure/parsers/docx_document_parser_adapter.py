@@ -10,6 +10,10 @@ from docx.enum.text import WD_COLOR_INDEX
 from docx.text.hyperlink import Hyperlink
 from domain.exceptions import DocumentBuildError
 from domain.value_objects.apa_structure import APASection, APASectionType
+from domain.value_objects.document_blueprint import (
+    DocumentBlueprint,
+    get_blueprint,
+)
 from domain.value_objects.document_node import (
     BULLETED_LIST,
     HEADING_1,
@@ -34,6 +38,7 @@ from domain.value_objects.document_node import (
     Mark,
     hyperlink_node,
 )
+from domain.value_objects.document_type import DocumentType
 
 _SECTION_ATTR = "{urn:scriva:document}section-type"
 _HIGHLIGHT_COLORS = {
@@ -48,17 +53,24 @@ _HIGHLIGHT_COLORS = {
 
 
 class DocxDocumentParserAdapter(DocumentParserPort):
-    async def parse(self, content: bytes) -> list[APASection]:
+    async def parse(
+        self,
+        content: bytes,
+        blueprint: DocumentBlueprint | None = None,
+    ) -> list[APASection]:
         if not content:
             raise DocumentBuildError("The uploaded DOCX file is empty.")
         try:
-            return await asyncio.to_thread(self._parse_sync, content)
+            target = blueprint or get_blueprint(DocumentType.REPORT)
+            return await asyncio.to_thread(self._parse_sync, content, target)
         except DocumentBuildError:
             raise
         except Exception as exc:
             raise DocumentBuildError(f"DOCX parsing failed: {exc}") from exc
 
-    def _parse_sync(self, content: bytes) -> list[APASection]:
+    def _parse_sync(
+        self, content: bytes, blueprint: DocumentBlueprint
+    ) -> list[APASection]:
         docx = DocxDocument(BytesIO(content))
         blocks = list(_iter_blocks(docx))
         sections: list[APASection] = []
@@ -76,6 +88,11 @@ class DocxDocumentParserAdapter(DocumentParserPort):
 
         for kind, item in blocks:
             marked_type = _marked_section_type(item)
+            if marked_type is not None and not blueprint.has(marked_type):
+                raise DocumentBuildError(
+                    f"Section '{marked_type.value}' is not allowed in a "
+                    f"'{blueprint.document_type.value}' document."
+                )
             if marked_type is not None and marked_type != current_type:
                 flush()
                 current_type = marked_type
@@ -139,7 +156,12 @@ class DocxDocumentParserAdapter(DocumentParserPort):
                     body.append(_paragraph(" "))
                 continue
             style = paragraph.style.name if paragraph.style else ""
-            detected = _section_type(text, style, current_type)
+            detected = _section_type(
+                text,
+                style,
+                current_type,
+                blueprint.allowed_types,
+            )
             if detected is not None:
                 if heading is not None:
                     body.extend(
@@ -155,7 +177,11 @@ class DocxDocumentParserAdapter(DocumentParserPort):
                 continue
             if heading is None:
                 # Content before the first semantic heading is the cover.
-                current_type = APASectionType.PRESENTATION
+                current_type = next(
+                    spec.section_type
+                    for spec in blueprint.sections
+                    if spec.section_type is not APASectionType.INDEX
+                )
                 heading = _block(
                     HEADING_1,
                     "Presentación",
@@ -175,7 +201,10 @@ class DocxDocumentParserAdapter(DocumentParserPort):
 
 
 def _section_type(
-    text: str, style: str, current: APASectionType | None
+    text: str,
+    style: str,
+    current: APASectionType | None,
+    allowed_types: frozenset[APASectionType],
 ) -> APASectionType | None:
     normalized = text.casefold()
     names = {
@@ -186,6 +215,18 @@ def _section_type(
         "table of contents": APASectionType.INDEX,
         "introducción": APASectionType.INTRODUCTION,
         "introduction": APASectionType.INTRODUCTION,
+        "resumen": APASectionType.ABSTRACT,
+        "abstract": APASectionType.ABSTRACT,
+        "marco teórico": APASectionType.THEORETICAL_FRAMEWORK,
+        "theoretical framework": APASectionType.THEORETICAL_FRAMEWORK,
+        "metodología": APASectionType.METHODOLOGY,
+        "methodology": APASectionType.METHODOLOGY,
+        "discusión": APASectionType.DISCUSSION,
+        "discussion": APASectionType.DISCUSSION,
+        "puntos clave": APASectionType.KEY_POINTS,
+        "key points": APASectionType.KEY_POINTS,
+        "recomendaciones": APASectionType.RECOMMENDATIONS,
+        "recommendations": APASectionType.RECOMMENDATIONS,
         "conclusión": APASectionType.CONCLUSION,
         "conclusion": APASectionType.CONCLUSION,
         "referencias": APASectionType.SOURCES,
@@ -198,9 +239,17 @@ def _section_type(
         "APA Heading 1",
         "APA Heading 1 Plain",
     }
-    if normalized in names and is_heading:
+    if (
+        normalized in names
+        and is_heading
+        and names[normalized] in allowed_types
+    ):
         return names[normalized]
-    if is_heading and current is None:
+    if (
+        is_heading
+        and current is None
+        and APASectionType.INTRODUCTION in allowed_types
+    ):
         return APASectionType.INTRODUCTION
     return None
 

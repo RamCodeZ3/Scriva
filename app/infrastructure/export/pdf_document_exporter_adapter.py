@@ -217,19 +217,22 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         )
 
         story: list = []
-        story += self._build_cover_page(document, styles, content_width)
-        story += self._build_toc_page(document, styles, content_width)
-
-        for section_type in (
-            APASectionType.INTRODUCTION,
-            APASectionType.BODY,
-            APASectionType.CONCLUSION,
-        ):
-            story += self._build_section(
-                document, section_type, styles, content_width
-            )
-
-        story += self._build_references(document, styles, content_width)
+        for section in document.sections:
+            section_type = section.section_type
+            if section_type is APASectionType.PRESENTATION:
+                story += self._build_cover_page(
+                    document, styles, content_width
+                )
+            elif section_type is APASectionType.INDEX:
+                story += self._build_toc_page(document, styles, content_width)
+            elif section_type is APASectionType.SOURCES:
+                story += self._build_references(
+                    document, styles, content_width
+                )
+            else:
+                story += self._build_section(
+                    document, section_type, styles, content_width
+                )
 
         # multiBuild (not build): see _ApaDocTemplate docstring — this is
         # what lets the index show real, adapter-discovered page numbers.
