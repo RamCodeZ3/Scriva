@@ -14,6 +14,10 @@ from domain.value_objects.apa_structure import (
     APASectionType,
     normalize_document_styles,
 )
+from domain.value_objects.document_blueprint import (
+    DocumentBlueprint,
+    get_blueprint,
+)
 from domain.value_objects.document_node import (
     PAGE_BREAK,
     SECTION_BREAK,
@@ -78,6 +82,7 @@ class Document:
             raise DocumentBuildError("A document needs at least one source.")
 
         now = datetime.utcnow()
+        blueprint = get_blueprint(document_type)
         return cls(
             id=uuid4(),
             user_id=user_id,
@@ -89,7 +94,15 @@ class Document:
             sources=[],
             created_at=now,
             updated_at=now,
+            global_style={
+                **APA7_DOCUMENT_STYLES,
+                **blueprint.style_overrides,
+            },
         )
+
+    @property
+    def blueprint(self) -> DocumentBlueprint:
+        return get_blueprint(self.document_type)
 
     def start_extraction(self) -> None:
         self._assert_status(DocumentStatus.PENDING)
@@ -130,7 +143,7 @@ class Document:
         self._validate_sections(sections)
 
         self.title = title
-        self.sections = sorted(sections, key=lambda s: s.section_type.order)
+        self.sections = self.blueprint.sort_sections(sections)
         self.sources = sources
         if global_style is not None:
             self.global_style = global_style
@@ -146,9 +159,8 @@ class Document:
         if title is not None:
             self.title = title
         if sections is not None:
-            self.sections = sorted(
-                sections, key=lambda s: s.section_type.order
-            )
+            self._validate_sections(sections)
+            self.sections = self.blueprint.sort_sections(sections)
         if global_style is not None:
             self.global_style = global_style
         self._touch()
@@ -168,7 +180,7 @@ class Document:
             )
         self._validate_sections(sections)
         self.title = title
-        self.sections = sorted(sections, key=lambda s: s.section_type.order)
+        self.sections = self.blueprint.sort_sections(sections)
         self.sources = sources
         existing_ids = {source.id for source in self.raw_sources}
         self.raw_sources.extend(
@@ -223,7 +235,8 @@ class Document:
             "type": "document",
             "meta": {
                 "title": self.title,
-                "style_guide": "APA7",
+                "style_guide": self.blueprint.style_guide,
+                "document_type": self.document_type.value,
                 "version": "2.0",
             },
             "global_style": normalize_document_styles(self.global_style),
@@ -233,22 +246,7 @@ class Document:
         }
 
     def _validate_sections(self, sections: list[APASection]) -> None:
-        if not sections:
-            raise DocumentBuildError(
-                "A document must have at least one section."
-            )
-        required = {
-            APASectionType.PRESENTATION,
-            APASectionType.INDEX,
-            APASectionType.INTRODUCTION,
-            APASectionType.BODY,
-            APASectionType.CONCLUSION,
-            APASectionType.SOURCES,
-        }
-        missing = required - {s.section_type for s in sections}
-        if missing:
-            names = ", ".join(m.value for m in missing)
-            raise DocumentBuildError(f"Missing required APA sections: {names}")
+        self.blueprint.validate_complete(sections)
 
     def _assert_status(self, expected: DocumentStatus) -> None:
         if self.status != expected:

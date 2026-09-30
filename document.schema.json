@@ -139,6 +139,7 @@
           "properties": {
             "title": {"type": "string"},
             "style_guide": {"type": "string"},
+            "document_type": {"type": "string"},
             "author": {"type": "string"},
             "version": {"const": "2.0"}
           },
