@@ -98,7 +98,22 @@ BLUEPRINTS: dict[DocumentType, DocumentBlueprint] = {
                 APASectionType.SOURCES,
             )
         ),
-    )
+    ),
+    DocumentType.RESEARCH: DocumentBlueprint(
+        document_type=DocumentType.RESEARCH,
+        sections=(
+            SectionSpec(APASectionType.PRESENTATION),
+            SectionSpec(APASectionType.INDEX),
+            SectionSpec(APASectionType.ABSTRACT),
+            SectionSpec(APASectionType.INTRODUCTION),
+            SectionSpec(APASectionType.THEORETICAL_FRAMEWORK),
+            SectionSpec(APASectionType.METHODOLOGY, required=False),
+            SectionSpec(APASectionType.BODY),
+            SectionSpec(APASectionType.DISCUSSION, required=False),
+            SectionSpec(APASectionType.CONCLUSION),
+            SectionSpec(APASectionType.SOURCES),
+        ),
+    ),
 }
 
 

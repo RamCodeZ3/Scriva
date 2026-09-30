@@ -10,6 +10,7 @@ from application.ports.document_writer_port import DocumentWriterPort
 from domain.exceptions import DocumentBuildError
 from domain.services.table_of_contents_builder import build_index_section
 from domain.value_objects.apa_structure import APASection, APASectionType
+from domain.value_objects.document_blueprint import get_blueprint
 from domain.value_objects.document_node import (
     BLOCK_QUOTE,
     BULLETED_LIST,
@@ -33,6 +34,8 @@ from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
 from google import genai
 from google.genai import types
+
+from infrastructure.ai.document_prompt_guidance import guidance_for
 
 # Full canonical APA 7 order (used for sorting the final section list —
 # 'index' is never requested from the AI, see _AI_SECTION_ORDER below).
@@ -356,6 +359,76 @@ _AUGMENT_RESPONSE_SHAPE_HINT = """
 """.strip()
 
 
+def _system_instruction(
+    document_type: DocumentType, *, augment: bool = False
+) -> str:
+    base = _AUGMENT_SYSTEM_INSTRUCTION if augment else _SYSTEM_INSTRUCTION
+    return (
+        f"{base}\n\nAUTHORITATIVE DOCUMENT BLUEPRINT\n"
+        f"Document type: {document_type.value}.\n"
+        f"{guidance_for(document_type)}\n"
+        "Use only facts, methods, findings, and recommendations supported "
+        "by the user's supplied sources. Never add outside knowledge or "
+        "invent evidence. Omit an optional section when the sources cannot "
+        "support it. The blueprint above overrides any generic section list "
+        "elsewhere in these instructions. Never generate the index section; "
+        "the application adds it only when the blueprint includes it."
+    )
+
+
+def _response_shape_hint(document_type: DocumentType) -> str:
+    blueprint = get_blueprint(document_type)
+    sections = [
+        {
+            "section_type": spec.section_type.value,
+            "title": "...",
+            "nodes": ["BLOCK", "..."],
+        }
+        for spec in blueprint.sections
+        if spec.section_type is not APASectionType.INDEX
+    ]
+    return json.dumps(
+        {
+            "title": "A short, original title",
+            "global_style": {},
+            "sections": sections,
+            "references": [
+                {
+                    "author": "...",
+                    "year": "...",
+                    "title": "...",
+                    "url": "...",
+                }
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _augment_response_shape_hint(document_type: DocumentType) -> str:
+    blueprint = get_blueprint(document_type)
+    sections = [
+        {
+            "section_type": spec.section_type.value,
+            "unchanged": True,
+        }
+        for spec in blueprint.sections
+        if spec.section_type
+        not in (APASectionType.PRESENTATION, APASectionType.INDEX)
+    ]
+    return json.dumps(
+        {
+            "title": "Usually the existing title",
+            "global_style": {},
+            "sections": sections,
+            "references": [],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
 class GeminiDocumentWriterAdapter(DocumentWriterPort):
     def __init__(
         self, api_key: str, model_name: str = "gemini-3.5-flash"
@@ -380,14 +453,15 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             additional_notes=additional_notes,
         )
         raw_text = await self._generate(
-            prompt, system_instruction=_SYSTEM_INSTRUCTION
+            prompt,
+            system_instruction=_system_instruction(document_type),
         )
         title_out, sections, references, global_style = self._parse_response(
-            raw_text
+            raw_text, document_type=document_type
         )
         return (
             title_out,
-            self._finalize_sections(sections),
+            self._finalize_sections(sections, document_type),
             references,
             global_style,
         )
@@ -411,22 +485,33 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             additional_notes=additional_notes,
         )
         raw_text = await self._generate(
-            prompt, system_instruction=_AUGMENT_SYSTEM_INSTRUCTION
+            prompt,
+            system_instruction=_system_instruction(
+                document_type, augment=True
+            ),
         )
         title_out, sections, references, global_style = (
             self._parse_augment_response(
-                raw_text, existing_sections=existing_sections
+                raw_text,
+                existing_sections=existing_sections,
+                document_type=document_type,
             )
         )
         return (
             title_out,
-            self._finalize_sections(sections),
+            self._finalize_sections(
+                sections, document_type, validate_complete=False
+            ),
             references,
             global_style,
         )
 
     def _finalize_sections(
-        self, sections: list[APASection]
+        self,
+        sections: list[APASection],
+        document_type: DocumentType = DocumentType.REPORT,
+        *,
+        validate_complete: bool = True,
     ) -> list[APASection]:
         """Drops any 'index' section the model produced despite being told
         not to (defensive — see rule 9 / rule 10 in the system prompts),
@@ -451,10 +536,16 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             else s
             for s in without_index
         ]
-        index_section = _ensure_trailing_page_break(build_index_section())
-        finalized = without_index + [index_section]
-        finalized.sort(key=lambda s: s.section_type.order)
-        return finalized
+        blueprint = get_blueprint(document_type)
+        if blueprint.has(APASectionType.INDEX):
+            without_index.append(
+                _ensure_trailing_page_break(build_index_section())
+            )
+        if validate_complete:
+            blueprint.validate_complete(without_index)
+        else:
+            blueprint.validate_membership(without_index)
+        return blueprint.sort_sections(without_index)
 
     async def _generate(self, prompt: str, *, system_instruction: str) -> str:
         try:
@@ -480,7 +571,12 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         presentation: PresentationInfo,
         additional_notes: str | None,
     ) -> str:
-        section_names = ", ".join(s.value for s in _AI_SECTION_ORDER)
+        blueprint = get_blueprint(document_type)
+        section_names = ", ".join(
+            spec.section_type.value
+            for spec in blueprint.sections
+            if spec.section_type is not APASectionType.INDEX
+        )
         notes = _clean_notes(additional_notes)
         return f"""
 Write a "{document_type.value}" document, following APA 7 rules, based
@@ -494,14 +590,18 @@ Additional notes from the user (extraction guidance, tone, focus, a
 questionnaire to answer inside "body", or explicit formatting requests to
 honor via 'styles'/'marks'): {notes}
 
-Required sections, in this exact order: {section_names}.
+Sections the model may return, in this exact order: {section_names}.
+Optional sections must be omitted when the sources do not support them.
+
+Section-specific guidance:
+{guidance_for(document_type)}
 
 Presentation/cover page data — the 'presentation' section's nodes must
 restate exactly these fields, one per paragraph, and nothing else:
 {_presentation_prompt_data(presentation)}
 
 Respond with a single JSON object shaped exactly like this:
-{_RESPONSE_SHAPE_HINT}
+{_response_shape_hint(document_type)}
 
 --- SOURCE MATERIAL START ---
 {source_content}
@@ -564,7 +664,7 @@ New source material to incorporate:
 --- NEW MATERIAL END ---
 
 Respond with a single JSON object shaped exactly like this:
-{_AUGMENT_RESPONSE_SHAPE_HINT}
+{_augment_response_shape_hint(document_type)}
 
 Every section_type shown in the existing sections must appear exactly once,
 either as "unchanged": true or with full "title"/"nodes". Do not return
@@ -573,7 +673,10 @@ de-duplicated list (old entries plus any genuinely new ones).
 """.strip()
 
     def _parse_response(
-        self, raw_text: str
+        self,
+        raw_text: str,
+        *,
+        document_type: DocumentType = DocumentType.REPORT,
     ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
         data = _decode_json(raw_text)
         title = self._validate_title(data.get("title"), field="title")
@@ -582,6 +685,7 @@ de-duplicated list (old entries plus any genuinely new ones).
         if not raw_sections:
             raise DocumentBuildError("Gemini response has no 'sections'.")
 
+        self._validate_raw_sections(raw_sections, document_type)
         sections = [
             self._build_section(s, introduction_fallback=title)
             for s in raw_sections
@@ -590,7 +694,11 @@ de-duplicated list (old entries plus any genuinely new ones).
         return title, sections, references, _parse_global_style(data)
 
     def _parse_augment_response(
-        self, raw_text: str, *, existing_sections: list[APASection]
+        self,
+        raw_text: str,
+        *,
+        existing_sections: list[APASection],
+        document_type: DocumentType = DocumentType.REPORT,
     ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
         data = _decode_json(raw_text)
         title = self._validate_title(data.get("title"), field="title")
@@ -600,6 +708,11 @@ de-duplicated list (old entries plus any genuinely new ones).
             raise DocumentBuildError("Gemini response has no 'sections'.")
 
         existing_by_type = {s.section_type: s for s in existing_sections}
+        self._validate_raw_sections(
+            raw_sections,
+            document_type,
+            require_complete=False,
+        )
         sections: list[APASection] = []
         for s in raw_sections:
             try:
@@ -626,6 +739,42 @@ de-duplicated list (old entries plus any genuinely new ones).
 
         references = self._parse_references(data)
         return title, sections, references, _parse_global_style(data)
+
+    def _validate_raw_sections(
+        self,
+        raw_sections: list[dict],
+        document_type: DocumentType,
+        *,
+        require_complete: bool = True,
+    ) -> None:
+        blueprint = get_blueprint(document_type)
+        seen: set[APASectionType] = set()
+        for raw in raw_sections:
+            try:
+                section_type = APASectionType(raw["section_type"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise DocumentBuildError(
+                    f"Malformed section in Gemini response: {exc}"
+                ) from exc
+            if not blueprint.has(section_type):
+                blueprint.order_of(section_type)
+            if section_type is APASectionType.INDEX:
+                raise DocumentBuildError(
+                    "Gemini must not generate the index section."
+                )
+            if section_type in seen:
+                raise DocumentBuildError(
+                    f"Duplicated section: '{section_type.value}'."
+                )
+            seen.add(section_type)
+
+        if not require_complete:
+            return
+        required = blueprint.required_types - {APASectionType.INDEX}
+        missing = required - seen
+        if missing:
+            names = ", ".join(sorted(item.value for item in missing))
+            raise DocumentBuildError(f"Missing required APA sections: {names}")
 
     def _build_section(
         self, raw: dict, *, introduction_fallback: str | None = None
