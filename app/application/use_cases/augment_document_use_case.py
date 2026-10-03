@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from domain.entities.document import Document, DocumentStatus
-from domain.entities.source import Source
+from domain.entities.source import Source, SourceType
 from domain.exceptions import DocumentBuildError
 from domain.value_objects.apa_structure import APASectionType
 
@@ -21,6 +21,7 @@ from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.docx_cache_port import DocxCachePort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
+from application.ports.source_extractor_port import ExtractedSource
 from application.ports.source_repository_port import SourceRepositoryPort
 from application.services.document_docx_cache import cache_docx
 
@@ -87,7 +88,8 @@ class AugmentDocumentUseCase:
             await self._report(document, on_progress)
 
             new_content = "\n\n".join(
-                f"[Fuente nueva {i + 1}]\n{s.get_content()}"
+                f"[Source id: {s.id}; kind: {s.source_type.value}]\n"
+                f"{s.get_content()}"
                 for i, s in enumerate(extracted_sources)
             )
             error_stage = "ai_expansion"
@@ -100,6 +102,11 @@ class AugmentDocumentUseCase:
                 existing_sections=document.sections,
                 existing_references=document.sources,
                 new_content=new_content,
+                sources=[
+                    source
+                    for source in document.raw_sources
+                    if source.is_ready()
+                ],
                 document_type=document.document_type,
                 existing_global_style=document.global_style,
                 additional_notes=data.additional_notes,
@@ -174,8 +181,27 @@ class AugmentDocumentUseCase:
                 extractor = self._extractor_factory.get_extractor(
                     source.source_type
                 )
-                content = await extractor.extract(source.raw)
-                source.mark_extracted(content)
+                extracted_result = await extractor.extract_with_metadata(
+                    source.raw
+                )
+                if not isinstance(extracted_result, ExtractedSource):
+                    extracted_result = ExtractedSource(
+                        content=await extractor.extract(source.raw)
+                    )
+                source.mark_extracted(
+                    extracted_result.content,
+                    title=extracted_result.title,
+                    author=extracted_result.author,
+                    published_at=extracted_result.published_at,
+                    site_name=extracted_result.site_name,
+                    canonical_url=extracted_result.canonical_url
+                    or (
+                        source.raw
+                        if source.source_type
+                        in {SourceType.WEB, SourceType.YOUTUBE}
+                        else None
+                    ),
+                )
                 extracted.append(source)
             except Exception as exc:
                 source.mark_failed(str(exc))

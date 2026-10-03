@@ -150,10 +150,10 @@ class DocumentBlueprintTest(unittest.TestCase):
 
         with self.assertRaisesRegex(
             DocumentBuildError,
-            "Missing required APA sections: sources",
+            "Missing required APA sections: body",
         ):
             adapter._parse_response(
-                _ai_response([APASectionType.BODY]),
+                _ai_response([APASectionType.SOURCES]),
                 document_type=DocumentType.SUMMARY,
             )
         with self.assertRaisesRegex(DocumentBuildError, "not allowed"):
@@ -200,7 +200,12 @@ class DocumentBlueprintTest(unittest.TestCase):
 def _created_document(document_type: DocumentType) -> Document:
     user_id = uuid4()
     source = Source.create("Source text", SourceType.TEXT, user_id)
-    return Document.create(user_id, "Title", document_type, [source])
+    sources = [source]
+    if document_type is DocumentType.SYNTHESIS:
+        sources.append(
+            Source.create("Second source", SourceType.TEXT, user_id)
+        )
+    return Document.create(user_id, "Title", document_type, sources)
 
 
 def _document(

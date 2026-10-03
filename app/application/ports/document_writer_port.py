@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from domain.entities.source import Source
 from domain.value_objects.apa_structure import APASection
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
@@ -19,6 +20,7 @@ class DocumentWriterPort(ABC):
         document_type: DocumentType,
         presentation: PresentationInfo,
         additional_notes: str | None = None,
+        sources: list[Source] | None = None,
     ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
         raise NotImplementedError
 
@@ -32,6 +34,7 @@ class DocumentWriterPort(ABC):
         document_type: DocumentType,
         existing_global_style: dict[str, Any],
         additional_notes: str | None = None,
+        sources: list[Source] | None = None,
     ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
         """
         Merges `new_content` into an existing document's sections.

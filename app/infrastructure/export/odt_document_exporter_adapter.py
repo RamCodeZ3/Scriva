@@ -204,7 +204,9 @@ class OdtDocumentExporterAdapter(DocumentExporterPort):
         _render_heading(odt.text, heading, context)
 
         imported = section is not None and any(
-            node.metadata.get("docxImported") for node in section.body_nodes
+            node.metadata.get("docxImported")
+            or node.metadata.get("generatedReference")
+            for node in section.body_nodes
         )
         if imported and section is not None:
             for node in section.body_nodes:

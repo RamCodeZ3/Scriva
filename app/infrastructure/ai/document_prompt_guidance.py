@@ -93,12 +93,15 @@ SECTION_GUIDANCE: dict[tuple[DocumentType, APASectionType], str] = {
     (
         DocumentType.BRIEF,
         APASectionType.BODY,
-    ): "Give concise context and analysis grounded in the sources.",
+    ): "Cover context, implications, trade-offs, and limits without "
+    "repeating KEY_POINTS. KEY_POINTS must state decision implications, "
+    "not merely restate descriptive content.",
     (
         DocumentType.BRIEF,
         APASectionType.RECOMMENDATIONS,
-    ): "Use a numbered list. Every recommendation must derive from the "
-    "sources; otherwise omit this section.",
+    ): "Use a numbered list. Every recommendation must include a citation "
+    "to the source supporting its underlying claim and must not introduce "
+    "an unsupported action or outcome; otherwise omit this section.",
     (DocumentType.BRIEF, APASectionType.SOURCES): "APA 7 references.",
 }
 

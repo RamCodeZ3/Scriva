@@ -49,15 +49,14 @@ class CreateDocumentUseCase:
         raw_sources = [
             Source.create_auto(raw, data.user_id) for raw in data.sources
         ]
-        for source in raw_sources:
-            await self._sources.save(source)
-
         document = Document.create(
             user_id=data.user_id,
             title=data.title,
             document_type=data.document_type,
             raw_sources=raw_sources,
         )
+        for source in raw_sources:
+            await self._sources.save(source)
         await self._documents.save(document)
 
         try:

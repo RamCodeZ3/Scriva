@@ -83,6 +83,11 @@ class Document:
 
         now = datetime.utcnow()
         blueprint = get_blueprint(document_type)
+        if len(raw_sources) < blueprint.min_sources:
+            raise DocumentBuildError(
+                f"A '{document_type.value}' document needs at least "
+                f"{blueprint.min_sources} sources."
+            )
         return cls(
             id=uuid4(),
             user_id=user_id,

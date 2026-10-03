@@ -234,6 +234,7 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
 
         imported_references = sources_section is not None and any(
             node.metadata.get("docxImported")
+            or node.metadata.get("generatedReference")
             for node in sources_section.body_nodes
         )
         if sources_section is not None and imported_references:

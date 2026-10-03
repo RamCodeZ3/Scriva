@@ -21,6 +21,7 @@ class DocumentBlueprint:
     sections: tuple[SectionSpec, ...]
     style_guide: str = "APA7"
     style_overrides: Mapping[str, Any] = field(default_factory=dict)
+    min_sources: int = 1
 
     def __post_init__(self) -> None:
         types = [spec.section_type for spec in self.sections]
@@ -28,6 +29,8 @@ class DocumentBlueprint:
             raise ValueError("A blueprint needs at least one section.")
         if len(types) != len(set(types)):
             raise ValueError("Blueprint sections must be unique.")
+        if self.min_sources < 1:
+            raise ValueError("A blueprint needs at least one source.")
 
     @property
     def required_types(self) -> frozenset[APASectionType]:
@@ -134,6 +137,7 @@ BLUEPRINTS: dict[DocumentType, DocumentBlueprint] = {
             SectionSpec(APASectionType.SOURCES),
         ),
         style_overrides={"lineHeight": 1.5},
+        min_sources=2,
     ),
     DocumentType.BRIEF: DocumentBlueprint(
         document_type=DocumentType.BRIEF,
