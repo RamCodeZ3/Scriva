@@ -2,6 +2,11 @@ import unittest
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from application.exceptions import NoSourcesExtractedError
+from application.ports.source_extractor_port import ExtractedSource
+from application.use_cases.process_document_use_case import (
+    ProcessDocumentUseCase,
+)
 from domain.entities.document import Document
 from domain.entities.source import Source, SourceStatus, SourceType
 from domain.exceptions import DocumentBuildError
@@ -14,6 +19,7 @@ from domain.value_objects.document_node import (
     text_node,
 )
 from domain.value_objects.document_type import DocumentType
+from domain.value_objects.presentation_info import PresentationInfo
 from infrastructure.persistence.supabase_source_repository import (
     SupabaseSourceRepository,
 )
@@ -21,7 +27,9 @@ from infrastructure.persistence.supabase_source_repository import (
 
 class CitationIntegrityTests(unittest.TestCase):
     def test_personal_and_group_authors_are_apa_formatted(self) -> None:
-        personal = _source(author="Javier Reyes Ochoa", title="Python")
+        personal = _source(
+            author="Javier Reyes Ochoa", title="Python", year=2023
+        )
         group = _source(author="Coursera Staff", title="Programming")
         result = resolve_citations(
             [_section(personal, group)], [personal, group], "en"
@@ -29,6 +37,9 @@ class CitationIntegrityTests(unittest.TestCase):
 
         self.assertEqual(result.references[0].author, "Coursera Staff")
         self.assertEqual(result.references[1].author, "Reyes Ochoa, J.")
+        self.assertIn(
+            "(2023, January 2)", result.references[1].to_apa_string()
+        )
 
     def test_same_author_year_is_disambiguated_by_title(self) -> None:
         beta = _source(author="Javier Reyes Ochoa", title="Beta", year=2023)
@@ -93,6 +104,59 @@ class CitationIntegrityTests(unittest.TestCase):
             ["Alpha Team", "Zebra Team"],
         )
 
+    def test_resolved_citation_keeps_source_identity_for_augmentation(
+        self,
+    ) -> None:
+        source = _source(author="Coursera Staff", title="Python", year=2023)
+        initial = resolve_citations([_section(source)], [source], "en")
+
+        repeated = resolve_citations(initial.sections, [source], "en")
+
+        self.assertEqual(len(repeated.references), 1)
+        self.assertEqual(repeated.references[0].title, "Python")
+        citation_node = repeated.sections[0].body_nodes[0]
+        self.assertEqual(
+            citation_node.metadata["citationSourceIds"], [str(source.id)]
+        )
+
+    def test_augmentation_drops_an_existing_reference_no_longer_cited(
+        self,
+    ) -> None:
+        kept = _source(author="Alpha Team", title="Kept", year=2023)
+        stale = _source(author="Beta Team", title="Stale", year=2022)
+        stale_reference = resolve_citations(
+            [_section(stale)], [stale], "en"
+        ).references[0]
+
+        result = resolve_citations(
+            [_section(kept)],
+            [kept, stale],
+            "en",
+            existing_references=[stale_reference],
+        )
+
+        self.assertEqual([item.title for item in result.references], ["Kept"])
+
+    def test_legacy_personal_reference_is_kept_when_still_cited(self) -> None:
+        source = _source(
+            author="Javier Reyes Ochoa", title="Python", year=2023
+        )
+        reference = resolve_citations(
+            [_section(source)], [source], "en"
+        ).references[0]
+        legacy_section = _section(
+            token="A supported claim (Reyes Ochoa, 2023)."
+        )
+
+        result = resolve_citations(
+            [legacy_section],
+            [source],
+            "en",
+            existing_references=[reference],
+        )
+
+        self.assertEqual(result.references, [reference])
+
     def test_long_url_survives_source_persistence_mapping(self) -> None:
         url = (
             "https://www.coursera.org/articles/"
@@ -116,6 +180,39 @@ class CitationIntegrityTests(unittest.TestCase):
             Document.create(
                 uuid4(), "Synthesis", DocumentType.SYNTHESIS, [source]
             )
+
+
+class SynthesisExtractionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_partial_extraction_marks_synthesis_failed(self) -> None:
+        user_id = uuid4()
+        first = Source.create("first", SourceType.TEXT, user_id)
+        second = Source.create("second", SourceType.TEXT, user_id)
+        document = Document.create(
+            user_id,
+            "Synthesis",
+            DocumentType.SYNTHESIS,
+            [first, second],
+        )
+        documents = _DocumentRepository(document)
+        sources = _SourceRepository([first, second])
+        use_case = ProcessDocumentUseCase(
+            documents,
+            sources,
+            _ExtractorFactory(),
+            _UnexpectedWriter(),
+        )
+
+        with self.assertRaisesRegex(
+            NoSourcesExtractedError, "successfully extracted sources"
+        ):
+            await use_case.execute(
+                document.id, PresentationInfo(student_name="Student")
+            )
+
+        self.assertEqual(document.status.value, "failed")
+        self.assertEqual(document.error_stage, "source_extraction")
+        self.assertEqual(first.status, SourceStatus.EXTRACTED)
+        self.assertEqual(second.status, SourceStatus.FAILED)
 
 
 def _source(
@@ -150,6 +247,45 @@ def _section(
         DocumentNode(type=HEADING_1, children=(text_node("Body"),)),
         (DocumentNode(type=PARAGRAPH, children=(text_node(citations),)),),
     )
+
+
+class _DocumentRepository:
+    def __init__(self, document: Document) -> None:
+        self.document = document
+
+    async def get_by_id(self, document_id):
+        return self.document if document_id == self.document.id else None
+
+    async def save(self, document: Document) -> None:
+        self.document = document
+
+
+class _SourceRepository:
+    def __init__(self, sources: list[Source]) -> None:
+        self.sources = {source.id: source for source in sources}
+
+    async def get_by_id(self, source_id):
+        return self.sources.get(source_id)
+
+    async def save(self, source: Source) -> None:
+        self.sources[source.id] = source
+
+
+class _ExtractorFactory:
+    def get_extractor(self, source_type):
+        return _PartialExtractor()
+
+
+class _PartialExtractor:
+    async def extract_with_metadata(self, raw: str) -> ExtractedSource:
+        if raw == "second":
+            raise RuntimeError("Unavailable")
+        return ExtractedSource(content="Extracted content")
+
+
+class _UnexpectedWriter:
+    async def write(self, **kwargs):
+        raise AssertionError("Writer must not run with too few sources")
 
 
 if __name__ == "__main__":

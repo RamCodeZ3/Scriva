@@ -77,9 +77,14 @@ def resolve_citations(
         (reference.url, reference.author, reference.title)
         for reference in references
     }
+    document_text = " ".join(
+        node.plain_text() for section in resolved for node in section.nodes
+    )
     for reference in existing_references or []:
         identity = (reference.url, reference.author, reference.title)
-        if identity not in known:
+        if identity not in known and _reference_is_cited(
+            reference, document_text
+        ):
             references.append(reference)
             known.add(identity)
     references.sort(key=_reference_sort_key)
@@ -97,6 +102,9 @@ def _citation_keys(sections: list[APASection]) -> set[str]:
         if section.section_type is APASectionType.SOURCES:
             continue
         for node in section.nodes:
+            stored_keys = node.metadata.get("citationSourceIds", [])
+            if isinstance(stored_keys, list):
+                keys.update(key for key in stored_keys if isinstance(key, str))
             for match in _CITATION.finditer(node.plain_text()):
                 keys.add(match.group("key"))
     return keys
@@ -165,12 +173,19 @@ def _replace_node(
                 node.text,
             ),
         )
+    matches = tuple(_CITATION.finditer(node.plain_text()))
+    metadata = dict(node.metadata)
+    if matches:
+        metadata["citationSourceIds"] = list(
+            dict.fromkeys(match.group("key") for match in matches)
+        )
     return replace(
         node,
         children=tuple(
             _replace_node(child, sources, suffixes, localized)
             for child in node.children
         ),
+        metadata=metadata,
     )
 
 
@@ -328,3 +343,18 @@ def _normalize(value: str) -> str:
         for character in unicodedata.normalize("NFKD", value.casefold())
         if not unicodedata.combining(character)
     )
+
+
+def _reference_is_cited(reference: SourceReference, text: str) -> bool:
+    missing = "s. f." if reference.language.startswith("es") else "n.d."
+    year = (
+        f"{reference.year}{reference.year_suffix}"
+        if reference.year
+        else missing
+    )
+    if reference.year is None and reference.year_suffix:
+        year = f"{missing}-{reference.year_suffix}"
+    author = reference.author or reference.title
+    if reference.author and "," in reference.author:
+        author = reference.author.split(",", 1)[0]
+    return f"{author}, {year}" in text or f"{author} ({year})" in text

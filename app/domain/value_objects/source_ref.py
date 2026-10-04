@@ -1,5 +1,36 @@
 from dataclasses import dataclass
 
+_MONTHS = {
+    "en": (
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ),
+    "es": (
+        "enero",
+        "febrero",
+        "marzo",
+        "abril",
+        "mayo",
+        "junio",
+        "julio",
+        "agosto",
+        "septiembre",
+        "octubre",
+        "noviembre",
+        "diciembre",
+    ),
+}
+
 
 @dataclass(frozen=True)
 class SourceReference:
@@ -27,9 +58,11 @@ class SourceReference:
             year = f"{missing}-{self.year_suffix}"
         date = year
         if self.year and self.month and self.day:
-            date = f"{year}, {self.month:02d} {self.day:02d}"
+            language = "es" if self.language.startswith("es") else "en"
+            month = _MONTHS[language][self.month - 1]
+            date = f"{year}, {month} {self.day}"
         if self.author:
-            prefix = f"{self.author}. ({date}). "
+            prefix = f"{self.author.rstrip('.')}. ({date}). "
             title_suffix = ""
         else:
             prefix = ""

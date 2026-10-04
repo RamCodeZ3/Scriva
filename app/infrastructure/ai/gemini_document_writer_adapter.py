@@ -327,42 +327,6 @@ _GENERIC_INTRODUCTION_TITLES = frozenset(
     }
 )
 
-_RESPONSE_SHAPE_HINT = """
-{
-  "title": "A short, original academic title you write yourself",
-  "global_style": {},
-  "sections": [
-    {"section_type": "presentation", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "introduction",
-     "title": "El impacto de la automatización en el aprendizaje",
-     "nodes": [ BLOCK, ... ]},
-    {"section_type": "body", "title": "internal label only",
-     "nodes": [ {"type": "heading-2", ...}, BLOCK, ... ]},
-    {"section_type": "conclusion", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "sources", "title": "...", "nodes": [ BLOCK, ... ]}
-  ],
-  "references": [
-    {"author": "...", "year": "...", "title": "...", "url": "..."}
-  ]
-}
-""".strip()
-
-_AUGMENT_RESPONSE_SHAPE_HINT = """
-{
-  "title": "usually the same title as before, unless it must change",
-  "global_style": {},
-  "sections": [
-    {"section_type": "introduction", "unchanged": true},
-    {"section_type": "body", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "conclusion", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "sources", "title": "...", "nodes": [ BLOCK, ... ]}
-  ],
-  "references": [
-    {"author": "...", "year": "...", "title": "...", "url": "..."}
-  ]
-}
-""".strip()
-
 
 def _system_instruction(
     document_type: DocumentType, *, augment: bool = False
@@ -479,9 +443,9 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             raise DocumentBuildError(
                 "Stored source metadata is required to build citations."
             )
-        citation_result = resolve_citations(
-            sections, sources, _detect_language(source_content)
-        )
+        language = _detect_language(source_content)
+        sections = _add_table_titles(sections, language)
+        citation_result = resolve_citations(sections, sources, language)
         return (
             title_out,
             self._finalize_sections(citation_result.sections, document_type),
@@ -507,6 +471,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             document_type=document_type,
             existing_global_style=existing_global_style,
             additional_notes=additional_notes,
+            sources=sources,
         )
         raw_text = await self._generate(
             prompt,
@@ -523,10 +488,12 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             raise DocumentBuildError(
                 "Stored source metadata is required to build citations."
             )
+        language = _detect_language(new_content)
+        sections = _add_table_titles(sections, language)
         citation_result = resolve_citations(
             sections,
             sources,
-            _detect_language(new_content),
+            language,
             existing_references=existing_references,
         )
         return (
@@ -663,6 +630,7 @@ Respond with a single JSON object shaped exactly like this:
         document_type: DocumentType,
         existing_global_style: dict[str, Any] | None = None,
         additional_notes: str | None = None,
+        sources: list[Source] | None = None,
     ) -> str:
         notes = _clean_notes(additional_notes)
         existing_sections_json = json.dumps(
@@ -698,6 +666,15 @@ with new source material — not rewrite from scratch.
 Existing sections (JSON, one entry per section_type): {existing_sections_json}
 
 Existing references (JSON): {existing_refs_json}
+
+Process facts (use these verbatim; never infer or alter their counts or
+kinds): {_process_facts(sources or [])}
+
+Available submitted source ids and metadata (these are the only valid
+citation keys): {_source_catalog(sources or [])}
+
+Use citation tokens in the exact form [[cite:<source_id>]] after every new
+substantive claim. Never write author/year citations or a references list.
 
 Existing global styles (preserve every value unless the current additional
 notes explicitly request a document-wide formatting change):
@@ -738,8 +715,7 @@ the reference list.
             self._build_section(s, introduction_fallback=title)
             for s in raw_sections
         ]
-        references = self._parse_references(data)
-        return title, sections, references, _parse_global_style(data)
+        return title, sections, [], _parse_global_style(data)
 
     def _parse_augment_response(
         self,
@@ -785,8 +761,7 @@ the reference list.
                 self._build_section(s, introduction_fallback=title)
             )
 
-        references = self._parse_references(data)
-        return title, sections, references, _parse_global_style(data)
+        return title, sections, [], _parse_global_style(data)
 
     def _validate_raw_sections(
         self,
@@ -879,8 +854,6 @@ the reference list.
                         "Every recommendation item must cite a submitted "
                         "source."
                     )
-        body_nodes = _add_table_titles(body_nodes)
-
         return APASection(
             section_type=section_type, heading=heading, body_nodes=body_nodes
         )
@@ -925,22 +898,6 @@ the reference list.
             )
         return node
 
-    def _parse_references(self, data: dict) -> list[SourceReference]:
-        try:
-            return [
-                SourceReference(
-                    author=r.get("author", ""),
-                    year=r.get("year", ""),
-                    title=r.get("title", ""),
-                    url=r.get("url"),
-                )
-                for r in data.get("references", [])
-            ]
-        except (KeyError, TypeError) as exc:
-            raise DocumentBuildError(
-                f"Malformed reference in Gemini response: {exc}"
-            ) from exc
-
     def _validate_title(self, value: object, *, field: str) -> str:
         if not isinstance(value, str) or not value.strip():
             raise DocumentBuildError(f"Gemini response has an empty {field}.")
@@ -977,6 +934,22 @@ def _process_facts(sources: list[Source]) -> str:
     return f"{len(sources)} successfully extracted source(s): {kinds}."
 
 
+def _source_catalog(sources: list[Source]) -> str:
+    return json.dumps(
+        [
+            {
+                "id": str(source.id),
+                "kind": source.source_type.value,
+                "title": source.title,
+                "author": source.author,
+            }
+            for source in sources
+            if source.is_ready()
+        ],
+        ensure_ascii=False,
+    )
+
+
 def _detect_language(content: str) -> str:
     lowered = f" {content.casefold()} "
     spanish_markers = (" el ", " la ", " de ", " que ", " para ", " y ")
@@ -985,48 +958,64 @@ def _detect_language(content: str) -> str:
 
 
 def _add_table_titles(
-    nodes: tuple[DocumentNode, ...],
-) -> tuple[DocumentNode, ...]:
-    output: list[DocumentNode] = []
+    sections: list[APASection], language: str
+) -> list[APASection]:
     table_number = 0
-    text = " ".join(node.plain_text() for node in nodes).casefold()
-    spanish = " tabla " in f" {text} "
-    for node in nodes:
-        if node.type != TABLE:
-            output.append(node)
-            continue
-        table_number += 1
-        if not node.caption or not node.caption.strip():
-            raise DocumentBuildError("Every table must have an APA title.")
-        label = "Tabla" if spanish else "Table"
-        if f"{label.casefold()} {table_number}" not in text:
-            raise DocumentBuildError(
-                f"Table {table_number} must be referenced in the text."
-            )
-        output.extend(
-            (
-                DocumentNode(
-                    type=PARAGRAPH,
-                    children=(
-                        text_node(
-                            f"{label} {table_number}",
-                            marks=(Mark(MARK_BOLD),),
+    text = " ".join(
+        node.plain_text()
+        for section in sections
+        for node in section.body_nodes
+    ).casefold()
+    label = "Tabla" if language.startswith("es") else "Table"
+    resolved: list[APASection] = []
+    for section in sections:
+        output: list[DocumentNode] = []
+        for node in section.body_nodes:
+            if node.type != TABLE:
+                output.append(node)
+                continue
+            table_number += 1
+            if node.metadata.get("apaTableNumbered"):
+                output.append(node)
+                continue
+            if not node.caption or not node.caption.strip():
+                raise DocumentBuildError("Every table must have an APA title.")
+            if f"{label.casefold()} {table_number}" not in text:
+                raise DocumentBuildError(
+                    f"Table {table_number} must be referenced in the text."
+                )
+            output.extend(
+                (
+                    DocumentNode(
+                        type=PARAGRAPH,
+                        children=(
+                            text_node(
+                                f"{label} {table_number}",
+                                marks=(Mark(MARK_BOLD),),
+                            ),
                         ),
                     ),
-                ),
-                DocumentNode(
-                    type=PARAGRAPH,
-                    children=(
-                        text_node(
-                            node.caption.strip(),
-                            marks=(Mark(MARK_ITALIC),),
+                    DocumentNode(
+                        type=PARAGRAPH,
+                        children=(
+                            text_node(
+                                node.caption.strip(),
+                                marks=(Mark(MARK_ITALIC),),
+                            ),
                         ),
                     ),
-                ),
-                _with_replaced(node, caption=None),
+                    _with_replaced(
+                        node,
+                        caption=None,
+                        metadata={
+                            **node.metadata,
+                            "apaTableNumbered": True,
+                        },
+                    ),
+                )
             )
-        )
-    return tuple(output)
+        resolved.append(_with_replaced(section, body_nodes=tuple(output)))
+    return resolved
 
 
 def _presentation_prompt_data(presentation: PresentationInfo) -> str:
