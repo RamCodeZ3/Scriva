@@ -574,6 +574,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         sources: list[Source] | None = None,
     ) -> str:
         blueprint = get_blueprint(document_type)
+        language = _detect_language(source_content)
         section_names = ", ".join(
             spec.section_type.value
             for spec in blueprint.sections
@@ -610,8 +611,9 @@ Section-specific guidance:
 {guidance_for(document_type)}
 
 Presentation/cover page data — the 'presentation' section's nodes must
-restate exactly these fields, one per paragraph, and nothing else:
-{_presentation_prompt_data(presentation)}
+restate exactly these fields, one per paragraph, and nothing else. The date
+is already localized; copy it verbatim without changing its format:
+{_presentation_prompt_data(presentation, language)}
 
 Respond with a single JSON object shaped exactly like this:
 {_response_shape_hint(document_type)}
@@ -1018,7 +1020,11 @@ def _add_table_titles(
     return resolved
 
 
-def _presentation_prompt_data(presentation: PresentationInfo) -> str:
+def _presentation_prompt_data(
+    presentation: PresentationInfo,
+    language: str,
+    current_date: date | None = None,
+) -> str:
     fields = [
         ("student_name", presentation.student_name),
         ("institution", presentation.institution),
@@ -1029,10 +1035,47 @@ def _presentation_prompt_data(presentation: PresentationInfo) -> str:
         (
             ("professor", presentation.professor),
             ("student_id", presentation.student_id),
-            ("date", date.today().isoformat()),
+            (
+                "date",
+                _format_cover_date(current_date or date.today(), language),
+            ),
         )
     )
     return "\n".join(f"- {name}: {value}" for name, value in fields)
+
+
+def _format_cover_date(value: date, language: str) -> str:
+    if language.startswith("es"):
+        months = (
+            "enero",
+            "febrero",
+            "marzo",
+            "abril",
+            "mayo",
+            "junio",
+            "julio",
+            "agosto",
+            "septiembre",
+            "octubre",
+            "noviembre",
+            "diciembre",
+        )
+        return f"{value.day} de {months[value.month - 1]} de {value.year}"
+    months = (
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    )
+    return f"{months[value.month - 1]} {value.day}, {value.year}"
 
 
 def _parse_global_style(data: dict) -> dict[str, Any]:
