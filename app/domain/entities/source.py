@@ -86,6 +86,12 @@ class Source:
     char_count: int | None = None
     error_message: str | None = None
     created_at: datetime | None = None
+    title: str | None = None
+    author: str | None = None
+    published_at: datetime | None = None
+    site_name: str | None = None
+    canonical_url: str | None = None
+    label: str | None = None
 
     @classmethod
     def create(
@@ -111,11 +117,25 @@ class Source:
             file_kind=file_kind,
         )
 
-    def mark_extracted(self, content: str) -> None:
+    def mark_extracted(
+        self,
+        content: str,
+        *,
+        title: str | None = None,
+        author: str | None = None,
+        published_at: datetime | None = None,
+        site_name: str | None = None,
+        canonical_url: str | None = None,
+    ) -> None:
         if not content.strip():
             raise InvalidSourceError("Extracted content cannot be empty.")
         self.content = content
         self.char_count = len(content)
+        self.title = title or self.title
+        self.author = author or self.author
+        self.published_at = published_at or self.published_at
+        self.site_name = site_name or self.site_name
+        self.canonical_url = canonical_url or self.canonical_url
         self.status = SourceStatus.EXTRACTED
 
     def mark_failed(self, reason: str) -> None:

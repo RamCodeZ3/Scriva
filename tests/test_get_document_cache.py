@@ -168,7 +168,7 @@ class _StaticParser:
     def __init__(self, sections) -> None:
         self.sections = sections
 
-    async def parse(self, content: bytes):
+    async def parse(self, content: bytes, blueprint=None):
         return self.sections
 
 

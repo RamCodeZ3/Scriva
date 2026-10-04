@@ -110,17 +110,16 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
 
         ctx = {"styles": styles, "content_width_pt": content_width_pt}
 
-        self._build_cover_page(docx, document, ctx)
-        self._build_toc_page(docx, document, ctx, toc_entries)
-
-        for section_type in (
-            APASectionType.INTRODUCTION,
-            APASectionType.BODY,
-            APASectionType.CONCLUSION,
-        ):
-            self._build_section(docx, document, section_type, ctx)
-
-        self._build_references(docx, document, ctx)
+        for section in document.sections:
+            section_type = section.section_type
+            if section_type is APASectionType.PRESENTATION:
+                self._build_cover_page(docx, document, ctx)
+            elif section_type is APASectionType.INDEX:
+                self._build_toc_page(docx, document, ctx, toc_entries)
+            elif section_type is APASectionType.SOURCES:
+                self._build_references(docx, document, ctx)
+            else:
+                self._build_section(docx, document, section_type, ctx)
 
         buffer = BytesIO()
         docx.save(buffer)
@@ -223,9 +222,6 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
                     _mark_section(body_elements[-2], section_type)
 
     def _build_references(self, docx, document: Document, ctx: dict) -> None:
-        conclusion = document.get_section(APASectionType.CONCLUSION)
-        if conclusion is None or conclusion.body_nodes[-1].type != PAGE_BREAK:
-            docx.add_page_break()
         sources_section = document.get_section(APASectionType.SOURCES)
         title = sources_section.title if sources_section else "References"
         heading = docx.add_paragraph(style=ctx["styles"]["Heading1"])
@@ -238,6 +234,7 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
 
         imported_references = sources_section is not None and any(
             node.metadata.get("docxImported")
+            or node.metadata.get("generatedReference")
             for node in sources_section.body_nodes
         )
         if sources_section is not None and imported_references:

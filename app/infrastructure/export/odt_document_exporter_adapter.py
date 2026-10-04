@@ -92,15 +92,16 @@ class OdtDocumentExporterAdapter(DocumentExporterPort):
         )
         context.configure_document()
 
-        self._build_cover(odt, document, context)
-        self._build_index(odt, document, context, toc_entries)
-        for section_type in (
-            APASectionType.INTRODUCTION,
-            APASectionType.BODY,
-            APASectionType.CONCLUSION,
-        ):
-            self._build_section(odt, document, section_type, context)
-        self._build_references(odt, document, context)
+        for section in document.sections:
+            section_type = section.section_type
+            if section_type is APASectionType.PRESENTATION:
+                self._build_cover(odt, document, context)
+            elif section_type is APASectionType.INDEX:
+                self._build_index(odt, document, context, toc_entries)
+            elif section_type is APASectionType.SOURCES:
+                self._build_references(odt, document, context)
+            else:
+                self._build_section(odt, document, section_type, context)
 
         output = BytesIO()
         odt.save(output)
@@ -192,9 +193,6 @@ class OdtDocumentExporterAdapter(DocumentExporterPort):
     def _build_references(
         self, odt: OpenDocumentText, document: Document, context: _Context
     ) -> None:
-        conclusion = document.get_section(APASectionType.CONCLUSION)
-        if conclusion is None or conclusion.body_nodes[-1].type != PAGE_BREAK:
-            _page_break(odt.text, context)
         section = document.get_section(APASectionType.SOURCES)
         if section is None:
             heading = DocumentNode(
@@ -206,7 +204,9 @@ class OdtDocumentExporterAdapter(DocumentExporterPort):
         _render_heading(odt.text, heading, context)
 
         imported = section is not None and any(
-            node.metadata.get("docxImported") for node in section.body_nodes
+            node.metadata.get("docxImported")
+            or node.metadata.get("generatedReference")
+            for node in section.body_nodes
         )
         if imported and section is not None:
             for node in section.body_nodes:

@@ -42,7 +42,6 @@ from application.use_cases.update_document_use_case import (
     UpdateDocumentUseCase,
 )
 from domain.entities.user import User
-from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 from fastapi import (
     APIRouter,
@@ -132,7 +131,7 @@ async def create_document(
 ) -> StreamingResponse:
     body, cleanup = await _request_with_files(request, CreateDocumentRequest)
     try:
-        document_type = DocumentType(body.document_type)
+        document_type = body.document_type
         presentation = PresentationInfo(
             student_name=body.user,
             professor=body.professor,

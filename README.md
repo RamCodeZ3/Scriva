@@ -2,7 +2,10 @@
 
 An intelligent service that ingests one or more information sources — web pages, YouTube videos, plain text, or uploaded files — and uses AI to automatically draft a complete, publication-ready document (title page, table of contents, introduction, body, conclusion, and references) formatted according to **APA 7th edition**.
 
-The goal is to extract information from virtually any source and automatically produce a document in the requested format: summary, synthesis, report, executive brief, study guide, quiz, and more.
+The goal is to extract information from virtually any source and automatically
+produce a report, documentary research paper, summary, synthesis, or executive
+brief. Each type has its own source-grounded section blueprint while sharing
+the same document node model and export pipeline.
 
 ## Purpose
 

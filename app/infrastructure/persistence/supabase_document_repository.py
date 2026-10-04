@@ -21,6 +21,7 @@ from domain.value_objects.apa_structure import (
     APASection,
     APASectionType,
 )
+from domain.value_objects.document_blueprint import get_blueprint
 from domain.value_objects.document_node import (
     PAGE_BREAK,
     SECTION_BREAK,
@@ -140,6 +141,7 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
                 )
             raw_sources.append(source)
 
+        document_type = DocumentType(row["document_type"])
         sections, global_style = _document_data_from_row(row)
         node_tree = row.get("node_tree")
         root = node_tree if isinstance(node_tree, dict) else {}
@@ -147,7 +149,7 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             id=UUID(row["id"]),
             user_id=UUID(row["user_id"]),
             title=row["title"],
-            document_type=DocumentType(row["document_type"]),
+            document_type=document_type,
             raw_sources=raw_sources,
             status=DocumentStatus(row["status"]),
             sections=sections,
@@ -214,7 +216,10 @@ def _document_data_from_row(
     node_tree = row.get("node_tree")
     if isinstance(node_tree, dict):
         children = node_tree.get("children") or []
-        sections = _sections_from_children(children)
+        sections = _sections_from_children(
+            children,
+            document_type=DocumentType(row["document_type"]),
+        )
         global_style = (
             node_tree.get("global_style")
             or node_tree.get("document_style")
@@ -238,13 +243,17 @@ def _document_data_from_row(
     }
 
 
-def _sections_from_children(children: list) -> list[APASection]:
+def _sections_from_children(
+    children: list,
+    document_type: DocumentType = DocumentType.REPORT,
+) -> list[APASection]:
     if not isinstance(children, list):
         raise ValueError("node_tree.children must be a JSON array.")
 
     grouped: dict[APASectionType, list[DocumentNode]] = {}
     current_section: APASectionType | None = None
-    canonical_sections = list(APASectionType)
+    blueprint = get_blueprint(document_type)
+    canonical_sections = [spec.section_type for spec in blueprint.sections]
     next_section_index = 0
     for raw_node in children:
         node = DocumentNode.from_dict(raw_node)
@@ -306,5 +315,4 @@ def _sections_from_children(children: list) -> list[APASection]:
                 body_nodes=tuple(nodes[1:]),
             )
         )
-    sections.sort(key=lambda section: section.section_type.order)
-    return sections
+    return blueprint.sort_sections(sections)

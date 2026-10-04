@@ -8,6 +8,7 @@ from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 from infrastructure.ai.gemini_document_writer_adapter import (
     GeminiDocumentWriterAdapter,
+    _format_cover_date,
 )
 
 
@@ -64,7 +65,34 @@ class PresentationInfoTest(unittest.TestCase):
             additional_notes=None,
         )
 
-        self.assertIn(f"- date: {date.today().isoformat()}", prompt)
+        expected = _format_cover_date(date.today(), "en")
+        self.assertIn(f"- date: {expected}", prompt)
+        self.assertIn("copy it verbatim without changing its format", prompt)
+
+    def test_cover_date_is_localized_in_spanish_and_english(self) -> None:
+        value = date(2026, 3, 15)
+
+        self.assertEqual(
+            _format_cover_date(value, "es"), "15 de marzo de 2026"
+        )
+        self.assertEqual(_format_cover_date(value, "en"), "March 15, 2026")
+
+    def test_spanish_prompt_uses_localized_cover_date(self) -> None:
+        adapter = object.__new__(GeminiDocumentWriterAdapter)
+
+        prompt = adapter._build_prompt(
+            source_content=(
+                "El contenido de la fuente explica que la fecha es para "
+                "el documento y la presentación."
+            ),
+            title="Título",
+            document_type=DocumentType.REPORT,
+            presentation=PresentationInfo(student_name="Estudiante"),
+            additional_notes=None,
+        )
+
+        expected = _format_cover_date(date.today(), "es")
+        self.assertIn(f"- date: {expected}", prompt)
 
     def test_real_values_are_trimmed_and_preserved(self) -> None:
         presentation = PresentationInfo(

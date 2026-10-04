@@ -12,7 +12,7 @@ from domain.value_objects.document_node import (
 
 
 class APASectionType(Enum):
-    """Canonical APA 7 section order."""
+    """Section identifiers used by APA-oriented document blueprints."""
 
     PRESENTATION = "presentation"
     INDEX = "index"
@@ -20,9 +20,16 @@ class APASectionType(Enum):
     BODY = "body"
     CONCLUSION = "conclusion"
     SOURCES = "sources"
+    ABSTRACT = "abstract"
+    THEORETICAL_FRAMEWORK = "theoretical_framework"
+    METHODOLOGY = "methodology"
+    DISCUSSION = "discussion"
+    KEY_POINTS = "key_points"
+    RECOMMENDATIONS = "recommendations"
 
     @property
     def order(self) -> int:
+        """Legacy report order; blueprint order is authoritative."""
         return {
             "PRESENTATION": 1,
             "INDEX": 2,
@@ -30,7 +37,7 @@ class APASectionType(Enum):
             "BODY": 4,
             "CONCLUSION": 5,
             "SOURCES": 6,
-        }[self.name]
+        }.get(self.name, len(APASectionType) + 1)
 
 
 APA7_DOCUMENT_STYLES: dict[str, Any] = {

@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from domain.entities.document import Document
-from domain.entities.source import Source
+from domain.entities.source import Source, SourceType
 from domain.value_objects.presentation_info import PresentationInfo
 
 from application.dtos.document_dtos import (
@@ -16,6 +16,7 @@ from application.exceptions import (
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
+from application.ports.source_extractor_port import ExtractedSource
 from application.ports.source_repository_port import SourceRepositoryPort
 
 
@@ -66,9 +67,16 @@ class ProcessDocumentUseCase:
                 raise NoSourcesExtractedError(
                     "None of the provided sources could be extracted."
                 )
+            if len(extracted_sources) < document.blueprint.min_sources:
+                raise NoSourcesExtractedError(
+                    f"A '{document.document_type.value}' document needs at "
+                    f"least {document.blueprint.min_sources} successfully "
+                    "extracted sources."
+                )
 
             combined_content = "\n\n".join(
-                f"[Fuente {i + 1}]\n{s.get_content()}"
+                f"[Source id: {s.id}; kind: {s.source_type.value}]\n"
+                f"{s.get_content()}"
                 for i, s in enumerate(extracted_sources)
             )
 
@@ -84,6 +92,7 @@ class ProcessDocumentUseCase:
                 global_style,
             ) = await self._writer.write(
                 source_content=combined_content,
+                sources=extracted_sources,
                 title=document.title,
                 document_type=document.document_type,
                 presentation=presentation,
@@ -122,8 +131,27 @@ class ProcessDocumentUseCase:
                 extractor = self._extractor_factory.get_extractor(
                     source.source_type
                 )
-                content = await extractor.extract(source.raw)
-                source.mark_extracted(content)
+                extracted_result = await extractor.extract_with_metadata(
+                    source.raw
+                )
+                if not isinstance(extracted_result, ExtractedSource):
+                    extracted_result = ExtractedSource(
+                        content=await extractor.extract(source.raw)
+                    )
+                source.mark_extracted(
+                    extracted_result.content,
+                    title=extracted_result.title,
+                    author=extracted_result.author,
+                    published_at=extracted_result.published_at,
+                    site_name=extracted_result.site_name,
+                    canonical_url=extracted_result.canonical_url
+                    or (
+                        source.raw
+                        if source.source_type
+                        in {SourceType.WEB, SourceType.YOUTUBE}
+                        else None
+                    ),
+                )
                 extracted.append(source)
             except Exception as exc:
                 source.mark_failed(str(exc))
