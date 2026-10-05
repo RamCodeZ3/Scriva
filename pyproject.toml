@@ -1,7 +1,7 @@
 [project]
 name = "scriva-backend"
-version = "1.4.0"
-description = "An AI-powered backend service that processes multiple sources of information to automatically draft and format documents in APA 7 style."
+version = "1.5.0"
+description = "An AI-powered backend service that processes multiple sources of information to automatically draft and format various types of documents in accordance with APA 7 style."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
