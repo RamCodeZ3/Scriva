@@ -79,10 +79,21 @@ class SupabaseSourceRepository(SourceRepositoryPort):
             "content": source.content,
             "char_count": source.char_count,
             "error_message": source.error_message,
+            "metadata": {
+                "title": source.title,
+                "author": source.author,
+                "published_at": source.published_at.isoformat()
+                if source.published_at
+                else None,
+                "site_name": source.site_name,
+                "canonical_url": source.canonical_url,
+                "label": source.label,
+            },
         }
 
     @staticmethod
     def _to_entity(row: dict) -> Source:
+        metadata = row.get("metadata") or {}
         return Source(
             id=UUID(row["id"]),
             source_type=SourceType(row["type"]),
@@ -100,4 +111,14 @@ class SupabaseSourceRepository(SourceRepositoryPort):
                 if row.get("created_at")
                 else None
             ),
+            title=metadata.get("title"),
+            author=metadata.get("author"),
+            published_at=(
+                datetime.fromisoformat(metadata["published_at"])
+                if metadata.get("published_at")
+                else None
+            ),
+            site_name=metadata.get("site_name"),
+            canonical_url=metadata.get("canonical_url"),
+            label=metadata.get("label"),
         )

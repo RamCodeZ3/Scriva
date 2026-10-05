@@ -5,11 +5,12 @@ from dataclasses import dataclass
 class PresentationInfo:
     """
     Metadata shown on the document cover page (APA 7 title page).
-    Only student_name and professor are required; subject is optional.
+    Only student_name is required. Missing secondary metadata is represented
+    by editable placeholders on the generated cover page.
     """
 
     student_name: str
-    professor: str
+    professor: str | None = None
     subject: str | None = None
     student_id: str | None = None
     institution: str | None = None
@@ -17,16 +18,22 @@ class PresentationInfo:
     def __post_init__(self) -> None:
         if not self.student_name.strip():
             raise ValueError("student_name cannot be empty.")
-        if not self.professor.strip():
-            raise ValueError("professor cannot be empty.")
         if self.subject is not None and not self.subject.strip():
             raise ValueError("subject cannot be blank if provided.")
+        for field_name in ("professor", "student_id", "institution"):
+            value = getattr(self, field_name)
+            normalized = (
+                value.strip()
+                if isinstance(value, str) and value.strip()
+                else f"<{field_name}>"
+            )
+            object.__setattr__(self, field_name, normalized)
 
     def display_institution(self) -> str:
-        return self.institution or "Institution not specified"
+        return self.institution or "<institution>"
 
     def display_student_id(self) -> str:
-        return self.student_id or "N/A"
+        return self.student_id or "<student_id>"
 
     def display_subject(self) -> str:
         return self.subject or "Subject not specified"

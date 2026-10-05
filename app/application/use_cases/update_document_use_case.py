@@ -45,7 +45,9 @@ class UpdateDocumentUseCase:
         sections = data.sections
         title = data.title
         if data.docx_bytes is not None:
-            parsed_sections = await self._parser.parse(data.docx_bytes)
+            parsed_sections = await self._parser.parse(
+                data.docx_bytes, document.blueprint
+            )
             sections = merge_docx_edits(document.sections, parsed_sections)
             presentation = next(
                 (

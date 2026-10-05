@@ -3,12 +3,16 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import replace as _with_replaced
+from datetime import date
 from typing import Any
 
 from application.ports.document_writer_port import DocumentWriterPort
+from domain.entities.source import Source
 from domain.exceptions import DocumentBuildError
+from domain.services.citation_service import resolve_citations
 from domain.services.table_of_contents_builder import build_index_section
 from domain.value_objects.apa_structure import APASection, APASectionType
+from domain.value_objects.document_blueprint import get_blueprint
 from domain.value_objects.document_node import (
     BLOCK_QUOTE,
     BULLETED_LIST,
@@ -16,6 +20,8 @@ from domain.value_objects.document_node import (
     HEADING_2,
     IMAGE,
     LIST_ITEM,
+    MARK_BOLD,
+    MARK_ITALIC,
     NUMBERED_LIST,
     PAGE_BREAK,
     PARAGRAPH,
@@ -24,6 +30,7 @@ from domain.value_objects.document_node import (
     TABLE_OF_CONTENTS,
     TABLE_ROW,
     DocumentNode,
+    Mark,
     page_break_node,
     text_node,
 )
@@ -32,6 +39,8 @@ from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
 from google import genai
 from google.genai import types
+
+from infrastructure.ai.document_prompt_guidance import guidance_for
 
 # Full canonical APA 7 order (used for sorting the final section list —
 # 'index' is never requested from the AI, see _AI_SECTION_ORDER below).
@@ -191,6 +200,9 @@ _SYSTEM_INSTRUCTION = (
     "student name, institution, subject/course, professor, student ID (if "
     "provided), and today's date — as separate 'paragraph' nodes (one "
     "field per paragraph), in the source's language, exactly as given. "
+    "Values enclosed in angle brackets, such as <professor>, are "
+    "intentional editable placeholders: reproduce them literally in their "
+    "own paragraph; never omit, translate, or replace them. "
     "Each paragraph must contain ONLY the field's plain value, with NO "
     'label or prefix of any kind — write "Aram Musset", never "Nombre: '
     'Aram Musset" or "Student: Aram Musset"; write "Universidad XYZ", '
@@ -315,41 +327,84 @@ _GENERIC_INTRODUCTION_TITLES = frozenset(
     }
 )
 
-_RESPONSE_SHAPE_HINT = """
-{
-  "title": "A short, original academic title you write yourself",
-  "global_style": {},
-  "sections": [
-    {"section_type": "presentation", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "introduction",
-     "title": "El impacto de la automatización en el aprendizaje",
-     "nodes": [ BLOCK, ... ]},
-    {"section_type": "body", "title": "internal label only",
-     "nodes": [ {"type": "heading-2", ...}, BLOCK, ... ]},
-    {"section_type": "conclusion", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "sources", "title": "...", "nodes": [ BLOCK, ... ]}
-  ],
-  "references": [
-    {"author": "...", "year": "...", "title": "...", "url": "..."}
-  ]
-}
-""".strip()
 
-_AUGMENT_RESPONSE_SHAPE_HINT = """
-{
-  "title": "usually the same title as before, unless it must change",
-  "global_style": {},
-  "sections": [
-    {"section_type": "introduction", "unchanged": true},
-    {"section_type": "body", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "conclusion", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "sources", "title": "...", "nodes": [ BLOCK, ... ]}
-  ],
-  "references": [
-    {"author": "...", "year": "...", "title": "...", "url": "..."}
-  ]
-}
-""".strip()
+def _system_instruction(
+    document_type: DocumentType, *, augment: bool = False
+) -> str:
+    base = _AUGMENT_SYSTEM_INSTRUCTION if augment else _SYSTEM_INSTRUCTION
+    return (
+        f"{base}\n\nAUTHORITATIVE DOCUMENT BLUEPRINT\n"
+        f"Document type: {document_type.value}.\n"
+        f"{guidance_for(document_type)}\n"
+        "Use only facts, methods, findings, and recommendations supported "
+        "by the user's supplied sources. Never add outside knowledge or "
+        "invent evidence. Omit an optional section when the sources cannot "
+        "support it. The blueprint above overrides any generic section list "
+        "elsewhere in these instructions. Never generate the index section; "
+        "the application adds it only when the blueprint includes it."
+        " Never generate the sources section or reference entries; the "
+        "application builds them from validated citation tokens and stored "
+        "source metadata."
+        " Every substantive claim in every document type must have a "
+        "citation token and use no outside knowledge. Do not call the work "
+        "systematic, exhaustive, rigorous, absolute, comprehensive, or use "
+        "equivalent intensity claims unless a supplied source explicitly "
+        "supports that characterization. ABSTRACT and KEY_POINTS may only "
+        "summarize ideas developed in the body. METHODOLOGY may describe "
+        "only a documentary review of the supplied source facts. Cover-page "
+        "values in angle brackets are intentional and must never be "
+        "replaced with invented values. Tables require a concise caption "
+        "and must be referred to in nearby prose as Table N or Tabla N."
+    )
+
+
+def _response_shape_hint(document_type: DocumentType) -> str:
+    blueprint = get_blueprint(document_type)
+    sections = [
+        {
+            "section_type": spec.section_type.value,
+            "title": "...",
+            "nodes": ["BLOCK", "..."],
+        }
+        for spec in blueprint.sections
+        if spec.section_type
+        not in (APASectionType.INDEX, APASectionType.SOURCES)
+    ]
+    return json.dumps(
+        {
+            "title": "A short, original title",
+            "global_style": {},
+            "sections": sections,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _augment_response_shape_hint(document_type: DocumentType) -> str:
+    blueprint = get_blueprint(document_type)
+    sections = [
+        {
+            "section_type": spec.section_type.value,
+            "unchanged": True,
+        }
+        for spec in blueprint.sections
+        if spec.section_type
+        not in (
+            APASectionType.PRESENTATION,
+            APASectionType.INDEX,
+            APASectionType.SOURCES,
+        )
+    ]
+    return json.dumps(
+        {
+            "title": "Usually the existing title",
+            "global_style": {},
+            "sections": sections,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 class GeminiDocumentWriterAdapter(DocumentWriterPort):
@@ -367,6 +422,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         document_type: DocumentType,
         presentation: PresentationInfo,
         additional_notes: str | None = None,
+        sources: list[Source] | None = None,
     ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
         prompt = self._build_prompt(
             source_content=source_content,
@@ -374,17 +430,26 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             document_type=document_type,
             presentation=presentation,
             additional_notes=additional_notes,
+            sources=sources,
         )
         raw_text = await self._generate(
-            prompt, system_instruction=_SYSTEM_INSTRUCTION
+            prompt,
+            system_instruction=_system_instruction(document_type),
         )
-        title_out, sections, references, global_style = self._parse_response(
-            raw_text
+        title_out, sections, _, global_style = self._parse_response(
+            raw_text, document_type=document_type
         )
+        if sources is None:
+            raise DocumentBuildError(
+                "Stored source metadata is required to build citations."
+            )
+        language = _detect_language(source_content)
+        sections = _add_table_titles(sections, language)
+        citation_result = resolve_citations(sections, sources, language)
         return (
             title_out,
-            self._finalize_sections(sections),
-            references,
+            self._finalize_sections(citation_result.sections, document_type),
+            citation_result.references,
             global_style,
         )
 
@@ -397,6 +462,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         document_type: DocumentType,
         existing_global_style: dict[str, Any],
         additional_notes: str | None = None,
+        sources: list[Source] | None = None,
     ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
         prompt = self._build_augment_prompt(
             existing_sections=existing_sections,
@@ -405,24 +471,48 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             document_type=document_type,
             existing_global_style=existing_global_style,
             additional_notes=additional_notes,
+            sources=sources,
         )
         raw_text = await self._generate(
-            prompt, system_instruction=_AUGMENT_SYSTEM_INSTRUCTION
+            prompt,
+            system_instruction=_system_instruction(
+                document_type, augment=True
+            ),
         )
-        title_out, sections, references, global_style = (
-            self._parse_augment_response(
-                raw_text, existing_sections=existing_sections
+        title_out, sections, _, global_style = self._parse_augment_response(
+            raw_text,
+            existing_sections=existing_sections,
+            document_type=document_type,
+        )
+        if sources is None:
+            raise DocumentBuildError(
+                "Stored source metadata is required to build citations."
             )
+        language = _detect_language(new_content)
+        sections = _add_table_titles(sections, language)
+        citation_result = resolve_citations(
+            sections,
+            sources,
+            language,
+            existing_references=existing_references,
         )
         return (
             title_out,
-            self._finalize_sections(sections),
-            references,
+            self._finalize_sections(
+                citation_result.sections,
+                document_type,
+                validate_complete=False,
+            ),
+            citation_result.references,
             global_style,
         )
 
     def _finalize_sections(
-        self, sections: list[APASection]
+        self,
+        sections: list[APASection],
+        document_type: DocumentType = DocumentType.REPORT,
+        *,
+        validate_complete: bool = True,
     ) -> list[APASection]:
         """Drops any 'index' section the model produced despite being told
         not to (defensive — see rule 9 / rule 10 in the system prompts),
@@ -447,10 +537,16 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             else s
             for s in without_index
         ]
-        index_section = _ensure_trailing_page_break(build_index_section())
-        finalized = without_index + [index_section]
-        finalized.sort(key=lambda s: s.section_type.order)
-        return finalized
+        blueprint = get_blueprint(document_type)
+        if blueprint.has(APASectionType.INDEX):
+            without_index.append(
+                _ensure_trailing_page_break(build_index_section())
+            )
+        if validate_complete:
+            blueprint.validate_complete(without_index)
+        else:
+            blueprint.validate_membership(without_index)
+        return blueprint.sort_sections(without_index)
 
     async def _generate(self, prompt: str, *, system_instruction: str) -> str:
         try:
@@ -475,9 +571,18 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         document_type: DocumentType,
         presentation: PresentationInfo,
         additional_notes: str | None,
+        sources: list[Source] | None = None,
     ) -> str:
-        section_names = ", ".join(s.value for s in _AI_SECTION_ORDER)
+        blueprint = get_blueprint(document_type)
+        language = _detect_language(source_content)
+        section_names = ", ".join(
+            spec.section_type.value
+            for spec in blueprint.sections
+            if spec.section_type
+            not in (APASectionType.INDEX, APASectionType.SOURCES)
+        )
         notes = _clean_notes(additional_notes)
+        process_facts = _process_facts(sources or [])
         return f"""
 Write a "{document_type.value}" document, following APA 7 rules, based
 exclusively on the source material below.
@@ -490,14 +595,28 @@ Additional notes from the user (extraction guidance, tone, focus, a
 questionnaire to answer inside "body", or explicit formatting requests to
 honor via 'styles'/'marks'): {notes}
 
-Required sections, in this exact order: {section_names}.
+Sections the model may return, in this exact order: {section_names}.
+Optional sections must be omitted when the sources do not support them.
+
+Process facts (use these verbatim; never infer or alter their counts or
+kinds): {process_facts}
+
+Use citation tokens in the exact form [[cite:<source_id>]] after every
+substantive claim. Never write author/year citations or a references list.
+Only use the source ids shown below. A work mentioned inside a source is not
+a submitted source; cite it only as
+[[cite:<source_id>|secondary=Author, Year]].
+
+Section-specific guidance:
+{guidance_for(document_type)}
 
 Presentation/cover page data — the 'presentation' section's nodes must
-restate exactly these fields, one per paragraph, and nothing else:
-{presentation}
+restate exactly these fields, one per paragraph, and nothing else. The date
+is already localized; copy it verbatim without changing its format:
+{_presentation_prompt_data(presentation, language)}
 
 Respond with a single JSON object shaped exactly like this:
-{_RESPONSE_SHAPE_HINT}
+{_response_shape_hint(document_type)}
 
 --- SOURCE MATERIAL START ---
 {source_content}
@@ -513,6 +632,7 @@ Respond with a single JSON object shaped exactly like this:
         document_type: DocumentType,
         existing_global_style: dict[str, Any] | None = None,
         additional_notes: str | None = None,
+        sources: list[Source] | None = None,
     ) -> str:
         notes = _clean_notes(additional_notes)
         existing_sections_json = json.dumps(
@@ -525,6 +645,7 @@ Respond with a single JSON object shaped exactly like this:
                 for s in existing_sections
                 if s.section_type is not APASectionType.PRESENTATION
                 and s.section_type is not APASectionType.INDEX
+                and s.section_type is not APASectionType.SOURCES
             ],
             ensure_ascii=False,
         )
@@ -548,6 +669,15 @@ Existing sections (JSON, one entry per section_type): {existing_sections_json}
 
 Existing references (JSON): {existing_refs_json}
 
+Process facts (use these verbatim; never infer or alter their counts or
+kinds): {_process_facts(sources or [])}
+
+Available submitted source ids and metadata (these are the only valid
+citation keys): {_source_catalog(sources or [])}
+
+Use citation tokens in the exact form [[cite:<source_id>]] after every new
+substantive claim. Never write author/year citations or a references list.
+
 Existing global styles (preserve every value unless the current additional
 notes explicitly request a document-wide formatting change):
 {json.dumps(existing_global_style or {}, ensure_ascii=False)}
@@ -560,16 +690,20 @@ New source material to incorporate:
 --- NEW MATERIAL END ---
 
 Respond with a single JSON object shaped exactly like this:
-{_AUGMENT_RESPONSE_SHAPE_HINT}
+{_augment_response_shape_hint(document_type)}
 
-Every section_type shown in the existing sections must appear exactly once,
+Every non-sources section_type shown in the existing sections must appear
+exactly once,
 either as "unchanged": true or with full "title"/"nodes". Do not return
-"presentation" or "index". "references" must be the complete,
-de-duplicated list (old entries plus any genuinely new ones).
+"presentation", "index", "sources", or "references". The application owns
+the reference list.
 """.strip()
 
     def _parse_response(
-        self, raw_text: str
+        self,
+        raw_text: str,
+        *,
+        document_type: DocumentType = DocumentType.REPORT,
     ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
         data = _decode_json(raw_text)
         title = self._validate_title(data.get("title"), field="title")
@@ -578,15 +712,19 @@ de-duplicated list (old entries plus any genuinely new ones).
         if not raw_sections:
             raise DocumentBuildError("Gemini response has no 'sections'.")
 
+        self._validate_raw_sections(raw_sections, document_type)
         sections = [
             self._build_section(s, introduction_fallback=title)
             for s in raw_sections
         ]
-        references = self._parse_references(data)
-        return title, sections, references, _parse_global_style(data)
+        return title, sections, [], _parse_global_style(data)
 
     def _parse_augment_response(
-        self, raw_text: str, *, existing_sections: list[APASection]
+        self,
+        raw_text: str,
+        *,
+        existing_sections: list[APASection],
+        document_type: DocumentType = DocumentType.REPORT,
     ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
         data = _decode_json(raw_text)
         title = self._validate_title(data.get("title"), field="title")
@@ -596,6 +734,11 @@ de-duplicated list (old entries plus any genuinely new ones).
             raise DocumentBuildError("Gemini response has no 'sections'.")
 
         existing_by_type = {s.section_type: s for s in existing_sections}
+        self._validate_raw_sections(
+            raw_sections,
+            document_type,
+            require_complete=False,
+        )
         sections: list[APASection] = []
         for s in raw_sections:
             try:
@@ -620,8 +763,46 @@ de-duplicated list (old entries plus any genuinely new ones).
                 self._build_section(s, introduction_fallback=title)
             )
 
-        references = self._parse_references(data)
-        return title, sections, references, _parse_global_style(data)
+        return title, sections, [], _parse_global_style(data)
+
+    def _validate_raw_sections(
+        self,
+        raw_sections: list[dict],
+        document_type: DocumentType,
+        *,
+        require_complete: bool = True,
+    ) -> None:
+        blueprint = get_blueprint(document_type)
+        seen: set[APASectionType] = set()
+        for raw in raw_sections:
+            try:
+                section_type = APASectionType(raw["section_type"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise DocumentBuildError(
+                    f"Malformed section in Gemini response: {exc}"
+                ) from exc
+            if not blueprint.has(section_type):
+                blueprint.order_of(section_type)
+            if section_type is APASectionType.INDEX:
+                raise DocumentBuildError(
+                    "Gemini must not generate the index section."
+                )
+            if section_type in seen:
+                raise DocumentBuildError(
+                    f"Duplicated section: '{section_type.value}'."
+                )
+            seen.add(section_type)
+
+        if not require_complete:
+            return
+        required = blueprint.required_types - {
+            APASectionType.INDEX,
+            APASectionType.SOURCES,
+        }
+        missing = required - seen
+        if missing:
+            names = ", ".join(sorted(item.value for item in missing))
+            raise DocumentBuildError(f"Missing required APA sections: {names}")
 
     def _build_section(
         self, raw: dict, *, introduction_fallback: str | None = None
@@ -665,7 +846,16 @@ de-duplicated list (old entries plus any genuinely new ones).
             section_type=section_type.value,
             children=(text_node(title),),
         )
-
+        if section_type is APASectionType.RECOMMENDATIONS:
+            for node in body_nodes:
+                if (
+                    node.type == LIST_ITEM
+                    and "[[cite:" not in node.plain_text()
+                ):
+                    raise DocumentBuildError(
+                        "Every recommendation item must cite a submitted "
+                        "source."
+                    )
         return APASection(
             section_type=section_type, heading=heading, body_nodes=body_nodes
         )
@@ -710,22 +900,6 @@ de-duplicated list (old entries plus any genuinely new ones).
             )
         return node
 
-    def _parse_references(self, data: dict) -> list[SourceReference]:
-        try:
-            return [
-                SourceReference(
-                    author=r.get("author", ""),
-                    year=r.get("year", ""),
-                    title=r.get("title", ""),
-                    url=r.get("url"),
-                )
-                for r in data.get("references", [])
-            ]
-        except (KeyError, TypeError) as exc:
-            raise DocumentBuildError(
-                f"Malformed reference in Gemini response: {exc}"
-            ) from exc
-
     def _validate_title(self, value: object, *, field: str) -> str:
         if not isinstance(value, str) or not value.strip():
             raise DocumentBuildError(f"Gemini response has an empty {field}.")
@@ -749,6 +923,159 @@ def _clean_notes(additional_notes: str | None) -> str:
         if additional_notes and additional_notes.strip()
         else "None"
     )
+
+
+def _process_facts(sources: list[Source]) -> str:
+    counts: dict[str, int] = {}
+    for source in sources:
+        kind = source.source_type.value
+        counts[kind] = counts.get(kind, 0) + 1
+    kinds = ", ".join(
+        f"{count} {kind}" for kind, count in sorted(counts.items())
+    )
+    return f"{len(sources)} successfully extracted source(s): {kinds}."
+
+
+def _source_catalog(sources: list[Source]) -> str:
+    return json.dumps(
+        [
+            {
+                "id": str(source.id),
+                "kind": source.source_type.value,
+                "title": source.title,
+                "author": source.author,
+            }
+            for source in sources
+            if source.is_ready()
+        ],
+        ensure_ascii=False,
+    )
+
+
+def _detect_language(content: str) -> str:
+    lowered = f" {content.casefold()} "
+    spanish_markers = (" el ", " la ", " de ", " que ", " para ", " y ")
+    marker_count = sum(item in lowered for item in spanish_markers)
+    return "es" if marker_count >= 3 else "en"
+
+
+def _add_table_titles(
+    sections: list[APASection], language: str
+) -> list[APASection]:
+    table_number = 0
+    text = " ".join(
+        node.plain_text()
+        for section in sections
+        for node in section.body_nodes
+    ).casefold()
+    label = "Tabla" if language.startswith("es") else "Table"
+    resolved: list[APASection] = []
+    for section in sections:
+        output: list[DocumentNode] = []
+        for node in section.body_nodes:
+            if node.type != TABLE:
+                output.append(node)
+                continue
+            table_number += 1
+            if node.metadata.get("apaTableNumbered"):
+                output.append(node)
+                continue
+            if not node.caption or not node.caption.strip():
+                raise DocumentBuildError("Every table must have an APA title.")
+            if f"{label.casefold()} {table_number}" not in text:
+                raise DocumentBuildError(
+                    f"Table {table_number} must be referenced in the text."
+                )
+            output.extend(
+                (
+                    DocumentNode(
+                        type=PARAGRAPH,
+                        children=(
+                            text_node(
+                                f"{label} {table_number}",
+                                marks=(Mark(MARK_BOLD),),
+                            ),
+                        ),
+                    ),
+                    DocumentNode(
+                        type=PARAGRAPH,
+                        children=(
+                            text_node(
+                                node.caption.strip(),
+                                marks=(Mark(MARK_ITALIC),),
+                            ),
+                        ),
+                    ),
+                    _with_replaced(
+                        node,
+                        caption=None,
+                        metadata={
+                            **node.metadata,
+                            "apaTableNumbered": True,
+                        },
+                    ),
+                )
+            )
+        resolved.append(_with_replaced(section, body_nodes=tuple(output)))
+    return resolved
+
+
+def _presentation_prompt_data(
+    presentation: PresentationInfo,
+    language: str,
+    current_date: date | None = None,
+) -> str:
+    fields = [
+        ("student_name", presentation.student_name),
+        ("institution", presentation.institution),
+    ]
+    if presentation.subject is not None:
+        fields.append(("subject", presentation.subject))
+    fields.extend(
+        (
+            ("professor", presentation.professor),
+            ("student_id", presentation.student_id),
+            (
+                "date",
+                _format_cover_date(current_date or date.today(), language),
+            ),
+        )
+    )
+    return "\n".join(f"- {name}: {value}" for name, value in fields)
+
+
+def _format_cover_date(value: date, language: str) -> str:
+    if language.startswith("es"):
+        months = (
+            "enero",
+            "febrero",
+            "marzo",
+            "abril",
+            "mayo",
+            "junio",
+            "julio",
+            "agosto",
+            "septiembre",
+            "octubre",
+            "noviembre",
+            "diciembre",
+        )
+        return f"{value.day} de {months[value.month - 1]} de {value.year}"
+    months = (
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    )
+    return f"{months[value.month - 1]} {value.day}, {value.year}"
 
 
 def _parse_global_style(data: dict) -> dict[str, Any]:
