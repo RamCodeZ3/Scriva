@@ -10,12 +10,16 @@ from uuid import UUID
 
 from application.dtos.document_dtos import DocumentReference
 from application.dtos.export_result import ExportResult
+from application.ports.document_process_repository_port import (
+    DocumentProcessRepositoryPort,
+)
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.source_repository_port import SourceRepositoryPort
 from application.services.document_tree_validation import (
     validate_document_tree,
 )
 from domain.entities.document import Document, DocumentStatus
+from domain.entities.document_process import DocumentProcess
 from domain.value_objects.apa_structure import (
     APA7_DOCUMENT_STYLES,
     APASection,
@@ -29,6 +33,7 @@ from domain.value_objects.document_node import (
 )
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.source_ref import SourceReference
+
 from supabase import Client
 
 
@@ -36,10 +41,14 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
     _TABLE = "documents"
 
     def __init__(
-        self, client: Client, source_repository: SourceRepositoryPort
+        self,
+        client: Client,
+        source_repository: SourceRepositoryPort,
+        process_repository: DocumentProcessRepositoryPort | None = None,
     ) -> None:
         self._client = client
         self._sources = source_repository
+        self._processes = process_repository
 
     async def save(self, document: Document) -> None:
         await asyncio.to_thread(self._save_sync, document)
@@ -48,13 +57,30 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
         row = await asyncio.to_thread(self._get_row_sync, str(document_id))
         if row is None:
             return None
-        return await self._to_entity(row)
+        process = (
+            await self._processes.get_latest(document_id)
+            if self._processes is not None
+            else None
+        )
+        return await self._to_entity(row, process)
 
     async def list_by_user(self, user_id: UUID) -> list[DocumentReference]:
         rows = await asyncio.to_thread(
             self._list_rows_by_user_sync, str(user_id)
         )
-        return [await self._to_document_reference(row) for row in rows]
+        if self._processes is None:
+            return [await self._to_document_reference(row) for row in rows]
+        process_by_document = await self._processes.get_latest_many(
+            [UUID(row["id"]) for row in rows]
+        )
+        return [
+            await self._to_document_reference(row)
+            for row in rows
+            if (
+                process_by_document.get(UUID(row["id"])) is not None
+                and process_by_document[UUID(row["id"])].status.value == "done"
+            )
+        ]
 
     async def delete(self, document_id: UUID) -> None:
         await asyncio.to_thread(self._delete_sync, str(document_id))
@@ -96,7 +122,6 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             self._client.table(self._TABLE)
             .select("id, title, updated_at")
             .eq("user_id", user_id)
-            .eq("status", "done")
             .order("updated_at", desc=True)
             .execute()
         )
@@ -121,16 +146,15 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             "title": document.title,
             "document_type": document.document_type.value,
             "source_ids": [str(s.id) for s in document.raw_sources],
-            "status": document.status.value,
             "node_tree": node_tree,
             "sources": [_to_jsonable(s) for s in document.sources],
             "created_at": document.created_at.isoformat(),
             "updated_at": document.updated_at.isoformat(),
-            "error_message": document.error_message,
-            "error_stage": document.error_stage,
         }
 
-    async def _to_entity(self, row: dict) -> Document:
+    async def _to_entity(
+        self, row: dict, process: DocumentProcess | None = None
+    ) -> Document:
         raw_sources = []
         for sid in row.get("source_ids") or []:
             source = await self._sources.get_by_id(UUID(sid))
@@ -151,7 +175,9 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             title=row["title"],
             document_type=document_type,
             raw_sources=raw_sources,
-            status=DocumentStatus(row["status"]),
+            status=DocumentStatus(
+                process.status.value if process is not None else "failed"
+            ),
             sections=sections,
             sources=[SourceReference(**s) for s in row["sources"]],
             global_style=global_style,
@@ -168,8 +194,12 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             ),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
-            error_message=row.get("error_message"),
-            error_stage=row.get("error_stage"),
+            error_message=(process.error_message if process else None),
+            error_stage=(
+                process.error_stage.value
+                if process and process.error_stage
+                else ("internal" if process is None else None)
+            ),
         )
 
     async def _to_document_reference(self, row: dict) -> DocumentReference:

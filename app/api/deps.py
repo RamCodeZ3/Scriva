@@ -277,8 +277,13 @@ def get_document_process_repository() -> DocumentProcessRepositoryPort:
 
 def get_document_repository(
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
+    process_repository: DocumentProcessRepositoryPort = Depends(
+        get_document_process_repository
+    ),
 ) -> DocumentRepositoryPort:
-    return SupabaseDocumentRepository(get_supabase_client(), source_repository)
+    return SupabaseDocumentRepository(
+        get_supabase_client(), source_repository, process_repository
+    )
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────
