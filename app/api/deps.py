@@ -48,8 +48,12 @@ from domain.entities.source import SourceType
 from domain.entities.user import User
 from dotenv import load_dotenv
 from fastapi import Depends, Header, HTTPException, status
+from infrastructure.ai.fallback_document_writer import FallbackDocumentWriter
 from infrastructure.ai.gemini_document_writer_adapter import (
     GeminiDocumentWriterAdapter,
+)
+from infrastructure.ai.openai_compatible_document_writer_adapter import (
+    OpenAICompatibleDocumentWriterAdapter,
 )
 from infrastructure.auth.google_oauth_token_provider import (
     GoogleOAuthTokenProvider,
@@ -147,7 +151,49 @@ def get_extractor_factory() -> ExtractorFactoryPort:
 
 @lru_cache
 def get_document_writer() -> DocumentWriterPort:
-    return GeminiDocumentWriterAdapter(api_key=os.environ["GEMINI_API_KEY"])
+    providers: dict[str, DocumentWriterPort] = {}
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if gemini_key:
+        providers["gemini"] = GeminiDocumentWriterAdapter(
+            api_key=gemini_key,
+            model_name=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
+            max_input_tokens=int(
+                os.environ.get("GEMINI_MAX_INPUT_TOKENS", "1000000")
+            ),
+        )
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if groq_key:
+        providers["groq"] = OpenAICompatibleDocumentWriterAdapter(
+            provider_name="groq",
+            base_url=os.environ.get(
+                "GROQ_BASE_URL", "https://api.groq.com/openai/v1"
+            ),
+            api_key=groq_key,
+            model_name=os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            max_input_tokens=int(
+                os.environ.get("GROQ_MAX_INPUT_TOKENS", "128000")
+            ),
+        )
+    order = [
+        name.strip()
+        for name in os.environ.get("AI_PROVIDER_ORDER", "gemini,groq").split(
+            ","
+        )
+        if name.strip()
+    ]
+    configured = [providers[name] for name in order if name in providers]
+    return FallbackDocumentWriter(
+        configured,
+        attempt_timeout_seconds=float(
+            os.environ.get("AI_ATTEMPT_TIMEOUT_SECONDS", "120")
+        ),
+        total_budget_seconds=float(
+            os.environ.get("AI_TOTAL_BUDGET_SECONDS", "300")
+        ),
+        circuit_cooldown_seconds=float(
+            os.environ.get("AI_CIRCUIT_COOLDOWN_SECONDS", "60")
+        ),
+    )
 
 
 @lru_cache
