@@ -87,6 +87,71 @@ least one source succeeded. A fatal error ends the stream with `status` set to
 `failed`, its cause in `error_message`, and the failing pipeline stage in
 `error_stage`; no DOCX part follows that event.
 
+## AI provider fallback
+
+The document writer tries configured providers in `AI_PROVIDER_ORDER`. The
+default order is `gemini,groq`; providers without an API key are omitted.
+Groq uses its OpenAI-compatible Chat Completions endpoint, while the provider
+model and context limit remain configurable.
+
+```env
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-3.5-flash
+GEMINI_MAX_INPUT_TOKENS=1000000
+GROQ_API_KEY=
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MAX_INPUT_TOKENS=128000
+AI_PROVIDER_ORDER=gemini,groq
+AI_ATTEMPT_TIMEOUT_SECONDS=120
+AI_TOTAL_BUDGET_SECONDS=300
+AI_CIRCUIT_COOLDOWN_SECONDS=60
+```
+
+The next provider is attempted for rate limits, provider authentication,
+timeouts, network/5xx errors, invalid JSON, invalid document structure, and
+semantic validation failures. Invalid or empty source input does not trigger
+fallback. A provider that returns 429 or 5xx is temporarily skipped by an
+in-memory circuit breaker. Circuit state is local to each application process
+and is not shared between instances. Document content and API keys are never
+written to fallback logs.
+
+## Documents and process history
+
+Stable document content belongs to `documents`: ownership, type, title,
+accumulated sources, and the canonical node tree. Runtime state belongs to the
+1:N `document_process_details` history. Every generation or expansion creates
+a process; API status, errors, and guards are derived from the newest process.
+Only one active process is allowed per document.
+
+Each process stores the sources handled by that execution and private AI
+metadata (`ai_provider`, `ai_model_used`, and `ai_attempts`). This metadata is
+not exposed through API responses. Failed source details remain derived from
+the related `Source` records.
+
+Because current status is the latest process, a failed expansion currently
+makes the document appear failed even though its previous content remains
+stored. Restoring the last successful process as the visible state is a future
+improvement.
+
+Interrupted requests are marked failed, and an idempotent periodic sweep
+closes stale active processes. Configure it with
+`PROCESS_SWEEP_INTERVAL_SECONDS` and `PROCESS_STALE_AFTER_SECONDS`; the stale
+threshold must exceed the total AI budget plus expected extraction time.
+
+### Migration deployment order
+
+1. Apply the expand migration `202610090001`.
+2. Deploy the process-aware application code and verify generation, expansion,
+   reads, exports, and stale-process handling.
+3. Take a database backup and obtain explicit human confirmation.
+4. Apply the destructive contract migration `202610090002`.
+5. Deploy code that no longer relies on the legacy document columns.
+
+Never apply the contract migration before the process-aware code is stable.
+Conversely, code that assumes the legacy columns are absent must not be
+deployed before the contract migration is ready and coordinated.
+
 ## Status
 
 This project is under active development. issues, and feedback are welcome.
