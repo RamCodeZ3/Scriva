@@ -85,12 +85,7 @@ class ProcessDocumentUseCase:
             await self._report(document, on_progress)
 
             error_stage = "ai_generation"
-            (
-                title,
-                sections,
-                references,
-                global_style,
-            ) = await self._writer.write(
+            writer_result = await self._writer.write(
                 source_content=combined_content,
                 sources=extracted_sources,
                 title=document.title,
@@ -103,10 +98,13 @@ class ProcessDocumentUseCase:
             await self._documents.save(document)
             await self._report(document, on_progress)
             document.complete(
-                title=title,
-                sections=sections,
-                sources=references,
-                global_style={**document.global_style, **global_style},
+                title=writer_result.title,
+                sections=writer_result.sections,
+                sources=writer_result.references,
+                global_style={
+                    **document.global_style,
+                    **writer_result.global_style,
+                },
             )
             await self._documents.save(document)
 

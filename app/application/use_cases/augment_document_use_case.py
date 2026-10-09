@@ -93,12 +93,7 @@ class AugmentDocumentUseCase:
                 for i, s in enumerate(extracted_sources)
             )
             error_stage = "ai_expansion"
-            (
-                title,
-                sections,
-                references,
-                global_style,
-            ) = await self._writer.augment(
+            writer_result = await self._writer.augment(
                 existing_sections=document.sections,
                 existing_references=document.sources,
                 new_content=new_content,
@@ -117,21 +112,26 @@ class AugmentDocumentUseCase:
             if original_cover is not None:
                 sections = [original_cover] + [
                     section
-                    for section in sections
+                    for section in writer_result.sections
                     if section.section_type is not APASectionType.PRESENTATION
                 ]
+            else:
+                sections = writer_result.sections
 
             document.start_drafting()
             await self._documents.save(document)
             await self._report(document, on_progress)
             document.augment(
-                title=title,
+                title=writer_result.title,
                 sections=sections,
-                sources=references,
+                sources=writer_result.references,
                 new_raw_sources=new_sources,
             )
             document.update_content(
-                global_style={**document.global_style, **global_style}
+                global_style={
+                    **document.global_style,
+                    **writer_result.global_style,
+                }
             )
             await self._documents.save(document)
         except Exception as exc:
