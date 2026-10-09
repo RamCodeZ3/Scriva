@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
+from contextlib import asynccontextmanager, suppress
+from datetime import timedelta
+
 import uvicorn
+from api.deps import get_document_process_repository
 from api.v1.documents import router as documents_router
 from api.v1.google_credentials import router as google_credentials_router
 from api.v1.sources import router as sources_router
@@ -27,7 +34,38 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-app = FastAPI(title="APA Document Generator API")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    stop = asyncio.Event()
+    task = asyncio.create_task(_stale_process_sweep(stop))
+    try:
+        yield
+    finally:
+        stop.set()
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+async def _stale_process_sweep(stop: asyncio.Event) -> None:
+    interval = float(os.environ.get("PROCESS_SWEEP_INTERVAL_SECONDS", "60"))
+    max_age = int(os.environ.get("PROCESS_STALE_AFTER_SECONDS", "900"))
+    while not stop.is_set():
+        try:
+            repository = get_document_process_repository()
+            await repository.fail_stale(timedelta(seconds=max_age))
+        except Exception:
+            logger.exception("Failed to sweep stale document processes.")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except TimeoutError:
+            continue
+
+
+app = FastAPI(title="APA Document Generator API", lifespan=lifespan)
 
 origins = [
     "http://localhost",

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from domain.entities.document import Document, DocumentStatus
 from domain.entities.document_process import (
     DocumentProcess,
@@ -169,6 +171,23 @@ class AugmentDocumentUseCase:
                 }
             )
             await self._documents.save(document)
+        except asyncio.CancelledError:
+            document.fail(
+                "The document process was interrupted before completion.",
+                "internal",
+            )
+            if process.status not in {
+                DocumentProcessStatus.DONE,
+                DocumentProcessStatus.FAILED,
+            }:
+                process.fail(
+                    "The document process was interrupted before completion.",
+                    DocumentProcessErrorStage.INTERNAL,
+                )
+            await asyncio.shield(self._documents.save(document))
+            await asyncio.shield(self._processes.save(process))
+            await self._report(document, on_progress)
+            raise
         except Exception as exc:
             document.fail(str(exc), error_stage)
             await self._documents.save(document)
