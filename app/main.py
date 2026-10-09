@@ -18,7 +18,11 @@ from application.exceptions import (
 from application.ports.document_exporter_resolver_port import (
     UnsupportedExportTargetError,
 )
-from domain.exceptions import DocumentBuildError, InvalidSourceError
+from domain.exceptions import (
+    ActiveDocumentProcessError,
+    DocumentBuildError,
+    InvalidSourceError,
+)
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -41,6 +45,13 @@ app.add_middleware(
 app.include_router(documents_router)
 app.include_router(sources_router)
 app.include_router(google_credentials_router)
+
+
+@app.exception_handler(ActiveDocumentProcessError)
+async def active_document_process_handler(
+    request: Request, exc: ActiveDocumentProcessError
+) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 @app.exception_handler(UserNotFoundError)

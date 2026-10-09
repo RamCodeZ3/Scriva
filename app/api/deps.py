@@ -8,6 +8,9 @@ from application.ports.document_exporter_resolver_port import (
     DocumentExporterResolverPort,
 )
 from application.ports.document_parser_port import DocumentParserPort
+from application.ports.document_process_repository_port import (
+    DocumentProcessRepositoryPort,
+)
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.docx_cache_port import DocxCachePort
@@ -98,6 +101,9 @@ from infrastructure.parsers.docx_document_parser_adapter import (
     DocxDocumentParserAdapter,
 )
 from infrastructure.persistence.supabase_client import build_supabase_client
+from infrastructure.persistence.supabase_document_process_repository import (
+    SupabaseDocumentProcessRepository,
+)
 from infrastructure.persistence.supabase_document_repository import (
     SupabaseDocumentRepository,
 )
@@ -265,6 +271,10 @@ def get_source_repository() -> SourceRepositoryPort:
     return SupabaseSourceRepository(get_supabase_client())
 
 
+def get_document_process_repository() -> DocumentProcessRepositoryPort:
+    return SupabaseDocumentProcessRepository(get_supabase_client())
+
+
 def get_document_repository(
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
 ) -> DocumentRepositoryPort:
@@ -336,11 +346,15 @@ def get_process_document_use_case(
         get_document_repository
     ),
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
+    process_repository: DocumentProcessRepositoryPort = Depends(
+        get_document_process_repository
+    ),
     extractor_factory: ExtractorFactoryPort = Depends(get_extractor_factory),
     document_writer: DocumentWriterPort = Depends(get_document_writer),
 ) -> ProcessDocumentUseCase:
     return ProcessDocumentUseCase(
         document_repository=document_repository,
+        process_repository=process_repository,
         source_repository=source_repository,
         extractor_factory=extractor_factory,
         document_writer=document_writer,
@@ -352,6 +366,9 @@ def get_create_document_use_case(
         get_document_repository
     ),
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
+    process_repository: DocumentProcessRepositoryPort = Depends(
+        get_document_process_repository
+    ),
     user_repository: UserRepositoryPort = Depends(get_user_repository),
     process_use_case: ProcessDocumentUseCase = Depends(
         get_process_document_use_case
@@ -362,6 +379,7 @@ def get_create_document_use_case(
     dispatcher = SyncJobDispatcherAdapter(process_use_case)
     return CreateDocumentUseCase(
         document_repository=document_repository,
+        process_repository=process_repository,
         source_repository=source_repository,
         user_repository=user_repository,
         job_dispatcher=dispatcher,
@@ -405,6 +423,9 @@ def get_augment_document_use_case(
         get_document_repository
     ),
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
+    process_repository: DocumentProcessRepositoryPort = Depends(
+        get_document_process_repository
+    ),
     extractor_factory: ExtractorFactoryPort = Depends(get_extractor_factory),
     document_writer: DocumentWriterPort = Depends(get_document_writer),
     exporter=Depends(get_docx_document_exporter),
@@ -412,6 +433,7 @@ def get_augment_document_use_case(
 ) -> AugmentDocumentUseCase:
     return AugmentDocumentUseCase(
         document_repository=document_repository,
+        process_repository=process_repository,
         source_repository=source_repository,
         extractor_factory=extractor_factory,
         document_writer=document_writer,

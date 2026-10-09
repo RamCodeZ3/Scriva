@@ -8,6 +8,7 @@ from application.use_cases.process_document_use_case import (
     ProcessDocumentUseCase,
 )
 from domain.entities.document import Document
+from domain.entities.document_process import DocumentProcess
 from domain.entities.source import Source, SourceStatus, SourceType
 from domain.exceptions import DocumentBuildError
 from domain.services.citation_service import resolve_citations
@@ -195,8 +196,14 @@ class SynthesisExtractionTests(unittest.IsolatedAsyncioTestCase):
         )
         documents = _DocumentRepository(document)
         sources = _SourceRepository([first, second])
+        processes = _ProcessRepository(
+            DocumentProcess.create_generation(
+                document.id, [first.id, second.id]
+            )
+        )
         use_case = ProcessDocumentUseCase(
             documents,
+            processes,
             sources,
             _ExtractorFactory(),
             _UnexpectedWriter(),
@@ -269,6 +276,19 @@ class _SourceRepository:
 
     async def save(self, source: Source) -> None:
         self.sources[source.id] = source
+
+
+class _ProcessRepository:
+    def __init__(self, process: DocumentProcess) -> None:
+        self.process = process
+
+    async def get_latest(self, document_id):
+        if self.process.document_id == document_id:
+            return self.process
+        return None
+
+    async def save(self, process: DocumentProcess) -> None:
+        self.process = process
 
 
 class _ExtractorFactory:

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from domain.entities.document import Document, DocumentStatus
+from domain.entities.document_process import (
+    DocumentProcess,
+    DocumentProcessErrorStage,
+    DocumentProcessStatus,
+)
 from domain.entities.source import Source, SourceType
 from domain.exceptions import DocumentBuildError
 from domain.value_objects.apa_structure import APASectionType
@@ -12,11 +17,15 @@ from application.dtos.document_dtos import (
     document_to_output,
 )
 from application.exceptions import (
+    AIProvidersExhaustedError,
     DocumentAccessDeniedError,
     DocumentNotFoundError,
     NoSourcesExtractedError,
 )
 from application.ports.document_exporter_port import DocumentExporterPort
+from application.ports.document_process_repository_port import (
+    DocumentProcessRepositoryPort,
+)
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.docx_cache_port import DocxCachePort
@@ -30,6 +39,7 @@ class AugmentDocumentUseCase:
     def __init__(
         self,
         document_repository: DocumentRepositoryPort,
+        process_repository: DocumentProcessRepositoryPort,
         source_repository: SourceRepositoryPort,
         extractor_factory: ExtractorFactoryPort,
         document_writer: DocumentWriterPort,
@@ -37,6 +47,7 @@ class AugmentDocumentUseCase:
         cache: DocxCachePort,
     ) -> None:
         self._documents = document_repository
+        self._processes = process_repository
         self._sources = source_repository
         self._extractor_factory = extractor_factory
         self._writer = document_writer
@@ -68,11 +79,15 @@ class AugmentDocumentUseCase:
         new_sources = [
             Source.create_auto(raw, data.user_id) for raw in data.sources
         ]
+        process = DocumentProcess.create_expansion(
+            document.id, [source.id for source in new_sources]
+        )
         error_stage = "source_extraction"
         try:
             for source in new_sources:
                 await self._sources.save(source)
             document.start_augmentation(new_sources)
+            await self._processes.create(process)
             await self._documents.save(document)
             await self._report(document, on_progress)
 
@@ -84,7 +99,9 @@ class AugmentDocumentUseCase:
                 )
 
             document.start_expansion()
+            process.transition_to(DocumentProcessStatus.EXPANDING)
             await self._documents.save(document)
+            await self._processes.save(process)
             await self._report(document, on_progress)
 
             new_content = "\n\n".join(
@@ -106,6 +123,22 @@ class AugmentDocumentUseCase:
                 existing_global_style=document.global_style,
                 additional_notes=data.additional_notes,
             )
+            process.record_ai_metadata(
+                writer_result.metadata.provider,
+                writer_result.metadata.model,
+                [
+                    {
+                        "provider": item.provider,
+                        "model": item.model,
+                        "outcome": item.outcome,
+                        "error_kind": item.error_kind,
+                        "error_detail": item.error_detail,
+                        "latency_ms": item.latency_ms,
+                    }
+                    for item in writer_result.metadata.attempts
+                ],
+            )
+            await self._processes.save(process)
 
             error_stage = "document_drafting"
             original_cover = document.get_section(APASectionType.PRESENTATION)
@@ -119,7 +152,9 @@ class AugmentDocumentUseCase:
                 sections = writer_result.sections
 
             document.start_drafting()
+            process.transition_to(DocumentProcessStatus.DRAFTING)
             await self._documents.save(document)
+            await self._processes.save(process)
             await self._report(document, on_progress)
             document.augment(
                 title=writer_result.title,
@@ -137,6 +172,32 @@ class AugmentDocumentUseCase:
         except Exception as exc:
             document.fail(str(exc), error_stage)
             await self._documents.save(document)
+            if isinstance(exc, AIProvidersExhaustedError):
+                process.record_ai_metadata(
+                    None,
+                    None,
+                    [
+                        {
+                            "provider": item.provider,
+                            "model": item.model,
+                            "outcome": item.outcome,
+                            "error_kind": item.error_kind,
+                            "error_detail": item.error_detail,
+                            "latency_ms": item.latency_ms,
+                        }
+                        for item in exc.attempts
+                    ],
+                )
+            if process.status not in {
+                DocumentProcessStatus.DONE,
+                DocumentProcessStatus.FAILED,
+            }:
+                try:
+                    stage = DocumentProcessErrorStage(error_stage)
+                except ValueError:
+                    stage = DocumentProcessErrorStage.INTERNAL
+                process.fail(str(exc), stage)
+                await self._processes.save(process)
             await self._report(document, on_progress)
             raise
 
@@ -153,10 +214,20 @@ class AugmentDocumentUseCase:
                 exported.file_bytes,
                 invalidate_existing=True,
             )
+            process.transition_to(DocumentProcessStatus.DONE)
+            await self._processes.save(process)
             await self._report(document, on_progress)
         except Exception as exc:
             document.fail(str(exc), "document_export")
             await self._documents.save(document)
+            if process.status not in {
+                DocumentProcessStatus.DONE,
+                DocumentProcessStatus.FAILED,
+            }:
+                process.fail(
+                    str(exc), DocumentProcessErrorStage.DOCUMENT_EXPORT
+                )
+                await self._processes.save(process)
             await self._report(document, on_progress)
             raise
         return DocumentFileOutput(

@@ -1,4 +1,9 @@
 from domain.entities.document import Document, DocumentStatus
+from domain.entities.document_process import (
+    DocumentProcess,
+    DocumentProcessErrorStage,
+    DocumentProcessStatus,
+)
 from domain.entities.source import Source
 from domain.exceptions import DocumentBuildError
 
@@ -13,6 +18,9 @@ from application.ports.document_exporter_port import DocumentExporterPort
 from application.ports.document_job_dispatcher_port import (
     DocumentJobDispatcherPort,
 )
+from application.ports.document_process_repository_port import (
+    DocumentProcessRepositoryPort,
+)
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.docx_cache_port import DocxCachePort
 from application.ports.source_repository_port import SourceRepositoryPort
@@ -24,6 +32,7 @@ class CreateDocumentUseCase:
     def __init__(
         self,
         document_repository: DocumentRepositoryPort,
+        process_repository: DocumentProcessRepositoryPort,
         source_repository: SourceRepositoryPort,
         user_repository: UserRepositoryPort,
         job_dispatcher: DocumentJobDispatcherPort,
@@ -31,6 +40,7 @@ class CreateDocumentUseCase:
         cache: DocxCachePort,
     ) -> None:
         self._documents = document_repository
+        self._processes = process_repository
         self._sources = source_repository
         self._users = user_repository
         self._dispatcher = job_dispatcher
@@ -57,7 +67,10 @@ class CreateDocumentUseCase:
         )
         for source in raw_sources:
             await self._sources.save(source)
-        await self._documents.save(document)
+        process = DocumentProcess.create_generation(
+            document.id, [source.id for source in raw_sources]
+        )
+        await self._processes.create_document_with_process(document, process)
 
         try:
             await self._dispatcher.dispatch(
@@ -90,11 +103,28 @@ class CreateDocumentUseCase:
                 exported.file_bytes,
                 invalidate_existing=True,
             )
+            current_process = await self._processes.get_latest(
+                final_document.id
+            )
+            if current_process is not None:
+                current_process.transition_to(DocumentProcessStatus.DONE)
+                await self._processes.save(current_process)
             if on_progress is not None:
                 await on_progress(metadata)
         except Exception as exc:
             final_document.fail(str(exc), "document_export")
             await self._documents.save(final_document)
+            current_process = await self._processes.get_latest(
+                final_document.id
+            )
+            if current_process is not None and current_process.status not in {
+                DocumentProcessStatus.DONE,
+                DocumentProcessStatus.FAILED,
+            }:
+                current_process.fail(
+                    str(exc), DocumentProcessErrorStage.DOCUMENT_EXPORT
+                )
+                await self._processes.save(current_process)
             if on_progress is not None:
                 await on_progress(document_to_output(final_document))
             raise
