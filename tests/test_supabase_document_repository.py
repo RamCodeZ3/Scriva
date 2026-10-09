@@ -70,6 +70,9 @@ class SupabaseDocumentRepositoryMappingTest(unittest.TestCase):
         self.assertNotIn("document_styles", row)
         self.assertNotIn("presentation", row)
         self.assertNotIn("additional_notes", row)
+        self.assertNotIn("status", row)
+        self.assertNotIn("error_message", row)
+        self.assertNotIn("error_stage", row)
 
     def test_reads_current_document_columns(self) -> None:
         row = self.repository._to_row(self.document)
