@@ -1,11 +1,16 @@
 import json
+import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
 
 from api.schemas.documents import AugmentDocumentRequest
 from api.v1.documents import _request_with_files
+from docx import Document
 from fastapi import HTTPException
+from infrastructure.extractors.file_extractor_adapter import (
+    FileExtractorAdapter,
+)
 from starlette.datastructures import FormData, Headers, UploadFile
 
 
@@ -65,6 +70,40 @@ class DocumentRequestUploadTests(unittest.IsolatedAsyncioTestCase):
         uploaded_path = Path(body.sources[0])
 
         self.assertEqual(uploaded_path.read_bytes(), b"audio-bytes")
+        cleanup()
+        self.assertFalse(uploaded_path.exists())
+
+    async def test_preserves_and_extracts_uploaded_docx(self) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".docx") as source:
+            document = Document()
+            document.add_paragraph("DOCX source content")
+            document.save(source.name)
+            source.seek(0)
+            upload = UploadFile(
+                BytesIO(source.read()),
+                filename="source.docx",
+            )
+
+        request = _Request(
+            "multipart/form-data; boundary=test",
+            form=FormData(
+                [
+                    ("payload", json.dumps({"sources": []})),
+                    ("files", upload),
+                ]
+            ),
+        )
+
+        body, cleanup = await _request_with_files(
+            request, AugmentDocumentRequest
+        )
+        uploaded_path = Path(body.sources[0])
+
+        self.assertEqual(uploaded_path.suffix, ".docx")
+        self.assertEqual(
+            await FileExtractorAdapter().extract(str(uploaded_path)),
+            "DOCX source content",
+        )
         cleanup()
         self.assertFalse(uploaded_path.exists())
 

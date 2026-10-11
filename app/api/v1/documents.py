@@ -437,6 +437,10 @@ def _progressive_document_response(
         finally:
             if not task.done():
                 task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
             if cleanup is not None:
                 await asyncio.to_thread(cleanup)
 

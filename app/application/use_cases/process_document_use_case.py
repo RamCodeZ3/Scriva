@@ -1,6 +1,12 @@
+import asyncio
 from uuid import UUID
 
 from domain.entities.document import Document
+from domain.entities.document_process import (
+    DocumentProcess,
+    DocumentProcessErrorStage,
+    DocumentProcessStatus,
+)
 from domain.entities.source import Source, SourceType
 from domain.value_objects.presentation_info import PresentationInfo
 
@@ -9,9 +15,13 @@ from application.dtos.document_dtos import (
     document_to_output,
 )
 from application.exceptions import (
+    AIProvidersExhaustedError,
     DocumentNotFoundError,
     NoSourcesExtractedError,
     SourceNotFoundError,
+)
+from application.ports.document_process_repository_port import (
+    DocumentProcessRepositoryPort,
 )
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
@@ -24,11 +34,13 @@ class ProcessDocumentUseCase:
     def __init__(
         self,
         document_repository: DocumentRepositoryPort,
+        process_repository: DocumentProcessRepositoryPort,
         source_repository: SourceRepositoryPort,
         extractor_factory: ExtractorFactoryPort,
         document_writer: DocumentWriterPort,
     ) -> None:
         self._documents = document_repository
+        self._processes = process_repository
         self._sources = source_repository
         self._extractor_factory = extractor_factory
         self._writer = document_writer
@@ -45,6 +57,11 @@ class ProcessDocumentUseCase:
             raise DocumentNotFoundError(
                 f"Document '{document_id}' does not exist."
             )
+        process = await self._processes.get_latest(document.id)
+        if process is None:
+            raise DocumentNotFoundError(
+                f"Document '{document_id}' has no generation process."
+            )
 
         sources: list[Source] = []
         for raw_source in document.raw_sources:
@@ -58,7 +75,9 @@ class ProcessDocumentUseCase:
         error_stage = "source_extraction"
         try:
             document.start_extraction()
-            await self._documents.save(document)
+            await self._save_state(
+                document, process, DocumentProcessStatus.EXTRACTING
+            )
             await self._report(document, on_progress)
 
             extracted_sources = await self._extract_sources(sources)
@@ -81,16 +100,13 @@ class ProcessDocumentUseCase:
             )
 
             document.start_generation()
-            await self._documents.save(document)
+            await self._save_state(
+                document, process, DocumentProcessStatus.GENERATING
+            )
             await self._report(document, on_progress)
 
             error_stage = "ai_generation"
-            (
-                title,
-                sections,
-                references,
-                global_style,
-            ) = await self._writer.write(
+            writer_result = await self._writer.write(
                 source_content=combined_content,
                 sources=extracted_sources,
                 title=document.title,
@@ -98,23 +114,76 @@ class ProcessDocumentUseCase:
                 presentation=presentation,
                 additional_notes=additional_notes,
             )
+            process.record_ai_metadata(
+                writer_result.metadata.provider,
+                writer_result.metadata.model,
+                [
+                    _attempt_to_dict(item)
+                    for item in writer_result.metadata.attempts
+                ],
+            )
+            await self._processes.save(process)
             error_stage = "document_drafting"
             document.start_drafting()
-            await self._documents.save(document)
+            await self._save_state(
+                document, process, DocumentProcessStatus.DRAFTING
+            )
             await self._report(document, on_progress)
             document.complete(
-                title=title,
-                sections=sections,
-                sources=references,
-                global_style={**document.global_style, **global_style},
+                title=writer_result.title,
+                sections=writer_result.sections,
+                sources=writer_result.references,
+                global_style={
+                    **document.global_style,
+                    **writer_result.global_style,
+                },
             )
             await self._documents.save(document)
 
+        except asyncio.CancelledError:
+            document.fail(
+                "The document process was interrupted before completion.",
+                "internal",
+            )
+            if process.status not in {
+                DocumentProcessStatus.DONE,
+                DocumentProcessStatus.FAILED,
+            }:
+                process.fail(
+                    "The document process was interrupted before completion.",
+                    DocumentProcessErrorStage.INTERNAL,
+                )
+            await asyncio.shield(self._documents.save(document))
+            await asyncio.shield(self._processes.save(process))
+            await self._report(document, on_progress)
+            raise
         except Exception as exc:
             document.fail(str(exc), error_stage)
             await self._documents.save(document)
+            if isinstance(exc, AIProvidersExhaustedError):
+                process.record_ai_metadata(
+                    None,
+                    None,
+                    [_attempt_to_dict(item) for item in exc.attempts],
+                )
+            if process.status not in {
+                DocumentProcessStatus.DONE,
+                DocumentProcessStatus.FAILED,
+            }:
+                process.fail(str(exc), _error_stage(error_stage))
+                await self._processes.save(process)
             await self._report(document, on_progress)
             raise
+
+    async def _save_state(
+        self,
+        document: Document,
+        process: DocumentProcess,
+        status: DocumentProcessStatus,
+    ) -> None:
+        process.transition_to(status)
+        await self._documents.save(document)
+        await self._processes.save(process)
 
     @staticmethod
     async def _report(
@@ -158,3 +227,21 @@ class ProcessDocumentUseCase:
             finally:
                 await self._sources.save(source)
         return extracted
+
+
+def _attempt_to_dict(attempt) -> dict:
+    return {
+        "provider": attempt.provider,
+        "model": attempt.model,
+        "outcome": attempt.outcome,
+        "error_kind": attempt.error_kind,
+        "error_detail": attempt.error_detail,
+        "latency_ms": attempt.latency_ms,
+    }
+
+
+def _error_stage(value: str) -> DocumentProcessErrorStage:
+    try:
+        return DocumentProcessErrorStage(value)
+    except ValueError:
+        return DocumentProcessErrorStage.INTERNAL

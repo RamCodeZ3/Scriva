@@ -91,6 +91,14 @@ and errors at the boundary. Do not leak SDK response objects into the
 application or domain. Keep extractor, persistence, AI, parser, and exporter
 responsibilities separate.
 
+Document content and processing state have separate persistence models.
+`documents` owns stable content and ownership, while
+`document_process_details` stores the 1:N history of generation and expansion
+attempts. Derive public document status and errors from the newest process;
+never reintroduce `status`, `error_message`, or `error_stage` as document-table
+columns. Process-level AI provider/model/attempt metadata is private and must
+not be exposed by API schemas.
+
 ### API (`app/api` and `app/main.py`)
 
 This is the outermost layer and the composition root:
@@ -115,6 +123,10 @@ authenticated user may access only their own documents.
 - Gemini (`google-genai`) drafts structured document content from extracted
   sources. Treat model output as untrusted input: validate it before creating
   domain objects.
+- Groq is the configured second writer through its OpenAI-compatible Chat
+  Completions endpoint. Provider order, models, context limits, attempt timeout,
+  total budget, and circuit-breaker cooldown are environment configuration.
+  Circuit breakers are in-memory and local to an application instance.
 - Playwright and Beautiful Soup extract relevant content from web pages,
   including JavaScript-rendered pages.
 - `youtube-transcript-api` retrieves YouTube transcripts and metadata. The

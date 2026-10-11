@@ -6,7 +6,12 @@ from dataclasses import replace as _with_replaced
 from datetime import date
 from typing import Any
 
-from application.ports.document_writer_port import DocumentWriterPort
+from application.ports.document_writer_port import (
+    AIAttempt,
+    AIWriterMetadata,
+    DocumentWriterPort,
+    DocumentWriterResult,
+)
 from domain.entities.source import Source
 from domain.exceptions import DocumentBuildError
 from domain.services.citation_service import resolve_citations
@@ -408,11 +413,17 @@ def _augment_response_shape_hint(document_type: DocumentType) -> str:
 
 
 class GeminiDocumentWriterAdapter(DocumentWriterPort):
+    provider_name = "gemini"
+
     def __init__(
-        self, api_key: str, model_name: str = "gemini-3.5-flash"
+        self,
+        api_key: str,
+        model_name: str = "gemini-3.6-flash",
+        max_input_tokens: int = 1_000_000,
     ) -> None:
         self._client = genai.Client(api_key=api_key)
         self._model_name = model_name
+        self.max_input_tokens = max_input_tokens
 
     async def write(
         self,
@@ -423,7 +434,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         presentation: PresentationInfo,
         additional_notes: str | None = None,
         sources: list[Source] | None = None,
-    ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
+    ) -> DocumentWriterResult:
         prompt = self._build_prompt(
             source_content=source_content,
             title=title,
@@ -446,11 +457,24 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         language = _detect_language(source_content)
         sections = _add_table_titles(sections, language)
         citation_result = resolve_citations(sections, sources, language)
-        return (
-            title_out,
-            self._finalize_sections(citation_result.sections, document_type),
-            citation_result.references,
-            global_style,
+        return DocumentWriterResult(
+            title=title_out,
+            sections=self._finalize_sections(
+                citation_result.sections, document_type
+            ),
+            references=citation_result.references,
+            global_style=global_style,
+            metadata=AIWriterMetadata(
+                provider=self.provider_name,
+                model=self._model_name,
+                attempts=(
+                    AIAttempt(
+                        provider=self.provider_name,
+                        model=self._model_name,
+                        outcome="success",
+                    ),
+                ),
+            ),
         )
 
     async def augment(
@@ -463,7 +487,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         existing_global_style: dict[str, Any],
         additional_notes: str | None = None,
         sources: list[Source] | None = None,
-    ) -> tuple[str, list[APASection], list[SourceReference], dict[str, Any]]:
+    ) -> DocumentWriterResult:
         prompt = self._build_augment_prompt(
             existing_sections=existing_sections,
             existing_references=existing_references,
@@ -496,15 +520,26 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             language,
             existing_references=existing_references,
         )
-        return (
-            title_out,
-            self._finalize_sections(
+        return DocumentWriterResult(
+            title=title_out,
+            sections=self._finalize_sections(
                 citation_result.sections,
                 document_type,
                 validate_complete=False,
             ),
-            citation_result.references,
-            global_style,
+            references=citation_result.references,
+            global_style=global_style,
+            metadata=AIWriterMetadata(
+                provider=self.provider_name,
+                model=self._model_name,
+                attempts=(
+                    AIAttempt(
+                        provider=self.provider_name,
+                        model=self._model_name,
+                        outcome="success",
+                    ),
+                ),
+            ),
         )
 
     def _finalize_sections(

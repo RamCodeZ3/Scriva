@@ -25,4 +25,5 @@ dependencies = [
     "supabase>=2.31.0",
     "uvicorn>=0.52.1",
     "youtube-transcript-api>=1.2.4",
+    "groq>=1.7.0",
 ]

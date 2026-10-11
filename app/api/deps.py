@@ -8,6 +8,9 @@ from application.ports.document_exporter_resolver_port import (
     DocumentExporterResolverPort,
 )
 from application.ports.document_parser_port import DocumentParserPort
+from application.ports.document_process_repository_port import (
+    DocumentProcessRepositoryPort,
+)
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.docx_cache_port import DocxCachePort
@@ -48,8 +51,12 @@ from domain.entities.source import SourceType
 from domain.entities.user import User
 from dotenv import load_dotenv
 from fastapi import Depends, Header, HTTPException, status
+from infrastructure.ai.fallback_document_writer import FallbackDocumentWriter
 from infrastructure.ai.gemini_document_writer_adapter import (
     GeminiDocumentWriterAdapter,
+)
+from infrastructure.ai.groq_document_writer_adapter import (
+    GroqDocumentWriterAdapter,
 )
 from infrastructure.auth.google_oauth_token_provider import (
     GoogleOAuthTokenProvider,
@@ -94,6 +101,9 @@ from infrastructure.parsers.docx_document_parser_adapter import (
     DocxDocumentParserAdapter,
 )
 from infrastructure.persistence.supabase_client import build_supabase_client
+from infrastructure.persistence.supabase_document_process_repository import (
+    SupabaseDocumentProcessRepository,
+)
 from infrastructure.persistence.supabase_document_repository import (
     SupabaseDocumentRepository,
 )
@@ -108,6 +118,9 @@ from infrastructure.persistence.supabase_user_repository import (
 )
 
 # ── Process-wide singletons ─────────────────────────────────────────────
+
+
+load_dotenv()
 
 
 @lru_cache
@@ -147,7 +160,46 @@ def get_extractor_factory() -> ExtractorFactoryPort:
 
 @lru_cache
 def get_document_writer() -> DocumentWriterPort:
-    return GeminiDocumentWriterAdapter(api_key=os.environ["GEMINI_API_KEY"])
+    providers: dict[str, DocumentWriterPort] = {}
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if gemini_key:
+        providers["gemini"] = GeminiDocumentWriterAdapter(
+            api_key=gemini_key,
+            model_name=os.environ.get("GEMINI_MODEL", "gemini-3.6-flash"),
+            max_input_tokens=int(
+                os.environ.get("GEMINI_MAX_INPUT_TOKENS", "1000000")
+            ),
+        )
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if groq_key:
+        providers["groq"] = GroqDocumentWriterAdapter(
+            base_url=os.environ.get("GROQ_BASE_URL", "https://api.groq.com"),
+            api_key=groq_key,
+            model_name=os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            max_input_tokens=int(
+                os.environ.get("GROQ_MAX_INPUT_TOKENS", "128000")
+            ),
+        )
+    order = [
+        name.strip()
+        for name in os.environ.get("AI_PROVIDER_ORDER", "groq,gemini").split(
+            ","
+        )
+        if name.strip()
+    ]
+    configured = [providers[name] for name in order if name in providers]
+    return FallbackDocumentWriter(
+        configured,
+        attempt_timeout_seconds=float(
+            os.environ.get("AI_ATTEMPT_TIMEOUT_SECONDS", "120")
+        ),
+        total_budget_seconds=float(
+            os.environ.get("AI_TOTAL_BUDGET_SECONDS", "300")
+        ),
+        circuit_cooldown_seconds=float(
+            os.environ.get("AI_CIRCUIT_COOLDOWN_SECONDS", "60")
+        ),
+    )
 
 
 @lru_cache
@@ -219,10 +271,19 @@ def get_source_repository() -> SourceRepositoryPort:
     return SupabaseSourceRepository(get_supabase_client())
 
 
+def get_document_process_repository() -> DocumentProcessRepositoryPort:
+    return SupabaseDocumentProcessRepository(get_supabase_client())
+
+
 def get_document_repository(
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
+    process_repository: DocumentProcessRepositoryPort = Depends(
+        get_document_process_repository
+    ),
 ) -> DocumentRepositoryPort:
-    return SupabaseDocumentRepository(get_supabase_client(), source_repository)
+    return SupabaseDocumentRepository(
+        get_supabase_client(), source_repository, process_repository
+    )
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────
@@ -290,11 +351,15 @@ def get_process_document_use_case(
         get_document_repository
     ),
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
+    process_repository: DocumentProcessRepositoryPort = Depends(
+        get_document_process_repository
+    ),
     extractor_factory: ExtractorFactoryPort = Depends(get_extractor_factory),
     document_writer: DocumentWriterPort = Depends(get_document_writer),
 ) -> ProcessDocumentUseCase:
     return ProcessDocumentUseCase(
         document_repository=document_repository,
+        process_repository=process_repository,
         source_repository=source_repository,
         extractor_factory=extractor_factory,
         document_writer=document_writer,
@@ -306,6 +371,9 @@ def get_create_document_use_case(
         get_document_repository
     ),
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
+    process_repository: DocumentProcessRepositoryPort = Depends(
+        get_document_process_repository
+    ),
     user_repository: UserRepositoryPort = Depends(get_user_repository),
     process_use_case: ProcessDocumentUseCase = Depends(
         get_process_document_use_case
@@ -316,6 +384,7 @@ def get_create_document_use_case(
     dispatcher = SyncJobDispatcherAdapter(process_use_case)
     return CreateDocumentUseCase(
         document_repository=document_repository,
+        process_repository=process_repository,
         source_repository=source_repository,
         user_repository=user_repository,
         job_dispatcher=dispatcher,
@@ -359,6 +428,9 @@ def get_augment_document_use_case(
         get_document_repository
     ),
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
+    process_repository: DocumentProcessRepositoryPort = Depends(
+        get_document_process_repository
+    ),
     extractor_factory: ExtractorFactoryPort = Depends(get_extractor_factory),
     document_writer: DocumentWriterPort = Depends(get_document_writer),
     exporter=Depends(get_docx_document_exporter),
@@ -366,6 +438,7 @@ def get_augment_document_use_case(
 ) -> AugmentDocumentUseCase:
     return AugmentDocumentUseCase(
         document_repository=document_repository,
+        process_repository=process_repository,
         source_repository=source_repository,
         extractor_factory=extractor_factory,
         document_writer=document_writer,

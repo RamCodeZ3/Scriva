@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
+from contextlib import asynccontextmanager, suppress
+from datetime import timedelta
+
 import uvicorn
+from api.deps import get_document_process_repository
 from api.v1.documents import router as documents_router
 from api.v1.google_credentials import router as google_credentials_router
 from api.v1.sources import router as sources_router
@@ -18,12 +25,47 @@ from application.exceptions import (
 from application.ports.document_exporter_resolver_port import (
     UnsupportedExportTargetError,
 )
-from domain.exceptions import DocumentBuildError, InvalidSourceError
+from domain.exceptions import (
+    ActiveDocumentProcessError,
+    DocumentBuildError,
+    InvalidSourceError,
+)
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-app = FastAPI(title="APA Document Generator API")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    stop = asyncio.Event()
+    task = asyncio.create_task(_stale_process_sweep(stop))
+    try:
+        yield
+    finally:
+        stop.set()
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+async def _stale_process_sweep(stop: asyncio.Event) -> None:
+    interval = float(os.environ.get("PROCESS_SWEEP_INTERVAL_SECONDS", "60"))
+    max_age = int(os.environ.get("PROCESS_STALE_AFTER_SECONDS", "900"))
+    while not stop.is_set():
+        try:
+            repository = get_document_process_repository()
+            await repository.fail_stale(timedelta(seconds=max_age))
+        except Exception:
+            logger.exception("Failed to sweep stale document processes.")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except TimeoutError:
+            continue
+
+
+app = FastAPI(title="APA Document Generator API", lifespan=lifespan)
 
 origins = [
     "http://localhost",
@@ -41,6 +83,13 @@ app.add_middleware(
 app.include_router(documents_router)
 app.include_router(sources_router)
 app.include_router(google_credentials_router)
+
+
+@app.exception_handler(ActiveDocumentProcessError)
+async def active_document_process_handler(
+    request: Request, exc: ActiveDocumentProcessError
+) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 @app.exception_handler(UserNotFoundError)
