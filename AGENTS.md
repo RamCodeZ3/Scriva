@@ -123,10 +123,10 @@ authenticated user may access only their own documents.
 - Gemini (`google-genai`) drafts structured document content from extracted
   sources. Treat model output as untrusted input: validate it before creating
   domain objects.
-- Groq is the configured second writer through its OpenAI-compatible Chat
-  Completions endpoint. Provider order, models, context limits, attempt timeout,
-  total budget, and circuit-breaker cooldown are environment configuration.
-  Circuit breakers are in-memory and local to an application instance.
+- Gemini writers fall back through an ordered list of free-tier text models.
+  Model order, context limits, attempt timeout, total budget, and circuit-breaker
+  cooldown are environment configuration. Circuit breakers are keyed by provider
+  and model, in-memory, and local to an application instance.
 - Playwright and Beautiful Soup extract relevant content from web pages,
   including JavaScript-rendered pages.
 - `youtube-transcript-api` retrieves YouTube transcripts and metadata. The
