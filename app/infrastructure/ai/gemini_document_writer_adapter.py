@@ -418,7 +418,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
     def __init__(
         self,
         api_key: str,
-        model_name: str = "gemini-3.6-flash",
+        model_name: str = "gemini-3.8-flash",
         max_input_tokens: int = 1_000_000,
     ) -> None:
         self._client = genai.Client(api_key=api_key)

@@ -55,9 +55,6 @@ from infrastructure.ai.fallback_document_writer import FallbackDocumentWriter
 from infrastructure.ai.gemini_document_writer_adapter import (
     GeminiDocumentWriterAdapter,
 )
-from infrastructure.ai.groq_document_writer_adapter import (
-    GroqDocumentWriterAdapter,
-)
 from infrastructure.auth.google_oauth_token_provider import (
     GoogleOAuthTokenProvider,
 )
@@ -160,41 +157,43 @@ def get_extractor_factory() -> ExtractorFactoryPort:
 
 @lru_cache
 def get_document_writer() -> DocumentWriterPort:
-    providers: dict[str, DocumentWriterPort] = {}
     gemini_key = os.environ.get("GEMINI_API_KEY")
-    if gemini_key:
-        providers["gemini"] = GeminiDocumentWriterAdapter(
+    if not gemini_key:
+        raise ValueError("GEMINI_API_KEY must be configured.")
+    models = list(
+        dict.fromkeys(
+            model.strip()
+            for model in os.environ.get(
+                "GEMINI_MODELS",
+                "gemini-3.8-flash,gemini-3.6-flash,"
+                "gemini-3.5-flash-lite,gemini-3.1-flash-lite",
+            ).split(",")
+            if model.strip()
+        )
+    )
+    # Preserve the legacy primary-model override during migration.
+    primary = os.environ.get("GEMINI_MODEL", "").strip()
+    if primary:
+        models = [primary, *(model for model in models if model != primary)]
+    if not models:
+        raise ValueError("GEMINI_MODELS must contain at least one model.")
+    configured = [
+        GeminiDocumentWriterAdapter(
             api_key=gemini_key,
-            model_name=os.environ.get("GEMINI_MODEL", "gemini-3.6-flash"),
+            model_name=model,
             max_input_tokens=int(
                 os.environ.get("GEMINI_MAX_INPUT_TOKENS", "1000000")
             ),
         )
-    groq_key = os.environ.get("GROQ_API_KEY")
-    if groq_key:
-        providers["groq"] = GroqDocumentWriterAdapter(
-            base_url=os.environ.get("GROQ_BASE_URL", "https://api.groq.com"),
-            api_key=groq_key,
-            model_name=os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
-            max_input_tokens=int(
-                os.environ.get("GROQ_MAX_INPUT_TOKENS", "128000")
-            ),
-        )
-    order = [
-        name.strip()
-        for name in os.environ.get("AI_PROVIDER_ORDER", "groq,gemini").split(
-            ","
-        )
-        if name.strip()
+        for model in models
     ]
-    configured = [providers[name] for name in order if name in providers]
     return FallbackDocumentWriter(
         configured,
         attempt_timeout_seconds=float(
             os.environ.get("AI_ATTEMPT_TIMEOUT_SECONDS", "120")
         ),
         total_budget_seconds=float(
-            os.environ.get("AI_TOTAL_BUDGET_SECONDS", "300")
+            os.environ.get("AI_TOTAL_BUDGET_SECONDS", "480")
         ),
         circuit_cooldown_seconds=float(
             os.environ.get("AI_CIRCUIT_COOLDOWN_SECONDS", "60")

@@ -11,27 +11,64 @@ class AIWriterConfigurationTests(unittest.TestCase):
     def tearDown(self) -> None:
         get_document_writer.cache_clear()
 
-    def test_uses_configured_provider_order_and_models(self) -> None:
-        environment = {
-            "GEMINI_API_KEY": "gemini-test-key",
-            "GEMINI_MODEL": "gemini-from-env",
-            "GROQ_API_KEY": "groq-test-key",
-            "GROQ_MODEL": "groq-from-env",
-            "AI_PROVIDER_ORDER": "groq,gemini",
-        }
+    def test_default_model_priority(self) -> None:
+        self.assertEqual(
+            self._models({"GEMINI_API_KEY": "test-key"}),
+            [
+                "gemini-3.8-flash",
+                "gemini-3.6-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.1-flash-lite",
+            ],
+        )
 
+    def test_configured_order_removes_blanks_and_duplicates(self) -> None:
+        self.assertEqual(
+            self._models(
+                {
+                    "GEMINI_API_KEY": "test-key",
+                    "GEMINI_MODELS": " second, ,first,second ",
+                }
+            ),
+            ["second", "first"],
+        )
+
+    def test_legacy_primary_precedes_fallbacks(self) -> None:
+        self.assertEqual(
+            self._models(
+                {
+                    "GEMINI_API_KEY": "test-key",
+                    "GEMINI_MODEL": "primary",
+                    "GEMINI_MODELS": "secondary,primary",
+                }
+            ),
+            ["primary", "secondary"],
+        )
+
+    def test_missing_key_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "GEMINI_API_KEY"):
+            self._models({})
+
+    def test_empty_model_list_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "GEMINI_MODELS"):
+            self._models(
+                {
+                    "GEMINI_API_KEY": "test-key",
+                    "GEMINI_MODELS": " , ",
+                }
+            )
+
+    def _models(self, environment: dict[str, str]) -> list[str]:
         with patch.dict(os.environ, environment, clear=True):
             get_document_writer.cache_clear()
             writer = get_document_writer()
-
-        self.assertEqual(
-            [provider.provider_name for provider in writer._providers],
-            ["groq", "gemini"],
+        self.assertTrue(
+            all(
+                provider.provider_name == "gemini"
+                for provider in writer._providers
+            )
         )
-        self.assertEqual(
-            [provider._model_name for provider in writer._providers],
-            ["groq-from-env", "gemini-from-env"],
-        )
+        return [provider._model_name for provider in writer._providers]
 
 
 if __name__ == "__main__":
