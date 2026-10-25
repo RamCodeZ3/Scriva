@@ -106,9 +106,10 @@ AI_CIRCUIT_COOLDOWN_SECONDS=60
 ```
 
 `GEMINI_MODELS` is an ordered, comma-separated list; blank entries and duplicate
-models are removed. An empty list is rejected. The legacy `GEMINI_MODEL`
-variable, when set, takes priority before this list. Remove it to use the
-default ranking. Groq configuration and `AI_PROVIDER_ORDER` are no longer used.
+models are removed. An empty list is rejected. `GEMINI_MODELS` is the only
+model-order configuration; the legacy `GEMINI_MODEL` variable is ignored.
+Restart the backend after changing the list to reload the cached writer.
+Groq configuration and `AI_PROVIDER_ORDER` are no longer used.
 `GEMINI_API_KEY` is required. The context limit applies to each model.
 
 The next model is attempted after rate limits, authentication errors, timeouts,

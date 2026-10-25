@@ -171,10 +171,6 @@ def get_document_writer() -> DocumentWriterPort:
             if model.strip()
         )
     )
-    # Preserve the legacy primary-model override during migration.
-    primary = os.environ.get("GEMINI_MODEL", "").strip()
-    if primary:
-        models = [primary, *(model for model in models if model != primary)]
     if not models:
         raise ValueError("GEMINI_MODELS must contain at least one model.")
     configured = [

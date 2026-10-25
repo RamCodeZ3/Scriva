@@ -33,7 +33,7 @@ class AIWriterConfigurationTests(unittest.TestCase):
             ["second", "first"],
         )
 
-    def test_legacy_primary_precedes_fallbacks(self) -> None:
+    def test_legacy_model_does_not_override_configured_order(self) -> None:
         self.assertEqual(
             self._models(
                 {
@@ -42,7 +42,7 @@ class AIWriterConfigurationTests(unittest.TestCase):
                     "GEMINI_MODELS": "secondary,primary",
                 }
             ),
-            ["primary", "secondary"],
+            ["secondary", "primary"],
         )
 
     def test_missing_key_is_rejected(self) -> None:
