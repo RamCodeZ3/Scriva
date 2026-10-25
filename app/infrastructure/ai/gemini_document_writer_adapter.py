@@ -186,7 +186,16 @@ _NODE_SCHEMA_RULES = (
     "separate paragraph nodes instead.\n"
     "- Titles (document title and every section title) must be short, "
     "original, in your own words, in the source's language, NEVER a URL, "
-    "NEVER copied verbatim from source text, at most ~12 words."
+    "NEVER copied verbatim from source text, at most ~12 words.\n"
+    "- The document title must appear exactly ONCE in the visible "
+    "document, as the presentation/cover heading rendered by the "
+    "application from the top-level JSON 'title'. Do NOT repeat it in "
+    "any 'nodes', paragraph, heading, introduction title, or other "
+    "visible section title. Give the introduction and each subtopic "
+    "their own distinct, content-specific heading. The top-level JSON "
+    "'title' remains required metadata and is not an extra visible node. "
+    "When expanding a document, preserve its existing cover and do not "
+    "add another occurrence of the document title."
 )
 
 _SYSTEM_INSTRUCTION = (
@@ -418,7 +427,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
     def __init__(
         self,
         api_key: str,
-        model_name: str = "gemini-3.6-flash",
+        model_name: str = "gemini-3.8-flash",
         max_input_tokens: int = 1_000_000,
     ) -> None:
         self._client = genai.Client(api_key=api_key)

@@ -4,7 +4,6 @@ import asyncio
 import unittest
 from typing import Any
 
-import httpx
 from application.exceptions import AIProvidersExhaustedError
 from application.ports.document_writer_port import (
     AIWriterMetadata,
@@ -13,7 +12,7 @@ from application.ports.document_writer_port import (
 from domain.exceptions import DocumentBuildError, InvalidSourceError
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
-from groq import NotFoundError
+from google.genai.errors import ClientError
 from infrastructure.ai.fallback_document_writer import FallbackDocumentWriter
 
 
@@ -59,22 +58,45 @@ class FallbackDocumentWriterTest(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         first = _Provider("gemini", error=RuntimeError("broken JSON"))
-        second = _Provider("groq")
+        second = _Provider("fallback")
         writer = FallbackDocumentWriter([first, second])
 
         result = await self._write(writer)
 
         self.assertEqual(first.calls, ["generation"])
         self.assertEqual(second.calls, ["generation"])
-        self.assertEqual(result.metadata.provider, "groq")
+        self.assertEqual(result.metadata.provider, "fallback")
         self.assertEqual(
             [attempt.outcome for attempt in result.metadata.attempts],
             ["failed", "success"],
         )
 
+    async def test_same_provider_models_fall_back_and_stop_on_success(
+        self,
+    ) -> None:
+        models = [_Provider("gemini") for _ in range(4)]
+        for index, model in enumerate(models):
+            model._model_name = f"model-{index}"
+        models[0].error = RuntimeError("HTTP 429")
+        models[1].error = RuntimeError("HTTP 503")
+        writer = FallbackDocumentWriter(models)
+
+        result = await writer.augment(
+            existing_sections=[],
+            existing_references=[],
+            new_content="new content",
+            document_type=DocumentType.SUMMARY,
+            existing_global_style={},
+        )
+
+        self.assertEqual(result.metadata.model, "model-2")
+        self.assertEqual(len(result.metadata.attempts), 3)
+        self.assertEqual(models[3].calls, [])
+        self.assertEqual(models[2].calls, ["expansion"])
+
     async def test_context_too_large_skips_provider(self) -> None:
         first = _Provider("small", max_input_tokens=1)
-        second = _Provider("groq")
+        second = _Provider("fallback")
         writer = FallbackDocumentWriter([first, second])
 
         result = await self._write(writer, content="content long enough")
@@ -87,19 +109,20 @@ class FallbackDocumentWriterTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_timeout_moves_to_next_provider(self) -> None:
         slow = _Provider("slow", delay=0.05)
-        fallback = _Provider("groq")
+        fallback = _Provider("fallback")
         writer = FallbackDocumentWriter(
             [slow, fallback], attempt_timeout_seconds=0.01
         )
 
         result = await self._write(writer)
 
-        self.assertEqual(result.metadata.provider, "groq")
+        self.assertEqual(result.metadata.provider, "fallback")
         self.assertEqual(result.metadata.attempts[0].error_kind, "timeout")
 
     async def test_rate_limit_opens_circuit_breaker(self) -> None:
         limited = _Provider("gemini", error=RuntimeError("HTTP 429"))
-        fallback = _Provider("groq")
+        fallback = _Provider("gemini")
+        fallback._model_name = "fallback-model"
         writer = FallbackDocumentWriter(
             [limited, fallback], circuit_cooldown_seconds=60
         )
@@ -132,19 +155,13 @@ class FallbackDocumentWriterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured.exception.stage, "ai_generation")
         self.assertEqual(len(captured.exception.attempts), 1)
 
-    async def test_groq_not_found_is_classified_as_configuration(self) -> None:
-        response = httpx.Response(
-            404,
-            request=httpx.Request("POST", "https://api.groq.com/bad"),
-        )
-        sdk_error = NotFoundError(
-            "Unknown request URL",
-            response=response,
-            body=None,
-        )
-        wrapped = DocumentBuildError(f"Groq request failed: {sdk_error}")
+    async def test_gemini_not_found_is_classified_as_configuration(
+        self,
+    ) -> None:
+        sdk_error = ClientError(404, {"error": {"message": "Not found"}})
+        wrapped = DocumentBuildError(f"Gemini request failed: {sdk_error}")
         wrapped.__cause__ = sdk_error
-        provider = _Provider("groq", error=wrapped)
+        provider = _Provider("fallback", error=wrapped)
         writer = FallbackDocumentWriter([provider])
 
         with self.assertRaises(AIProvidersExhaustedError) as captured:

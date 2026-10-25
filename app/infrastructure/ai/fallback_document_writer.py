@@ -20,7 +20,7 @@ from domain.value_objects.apa_structure import APASection
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
-from groq import BadRequestError, NotFoundError
+from google.genai.errors import ClientError
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class FallbackDocumentWriter(DocumentWriterPort):
         self._attempt_timeout = attempt_timeout_seconds
         self._total_budget = total_budget_seconds
         self._cooldown = circuit_cooldown_seconds
-        self._circuit_open_until: dict[str, float] = {}
+        self._circuit_open_until: dict[tuple[str, str], float] = {}
 
     async def write(
         self,
@@ -116,7 +116,7 @@ class FallbackDocumentWriter(DocumentWriterPort):
                     AIAttempt(name, model, "total_budget_exhausted")
                 )
                 break
-            if self._circuit_open_until.get(name, 0) > now:
+            if self._circuit_open_until.get((name, model), 0) > now:
                 attempts.append(AIAttempt(name, model, "skipped_circuit_open"))
                 continue
             limit = getattr(provider, "max_input_tokens", None)
@@ -147,7 +147,7 @@ class FallbackDocumentWriter(DocumentWriterPort):
                     _failed_attempt(name, model, kind, exc, attempt_started)
                 )
                 if kind in {"rate_limit", "server_error"}:
-                    self._circuit_open_until[name] = (
+                    self._circuit_open_until[(name, model)] = (
                         time.monotonic() + self._cooldown
                     )
                 logger.warning(
@@ -185,7 +185,7 @@ def _estimate_tokens(content: str) -> int:
 
 def _error_kind(exc: Exception) -> str:
     if any(
-        isinstance(item, (BadRequestError, NotFoundError))
+        isinstance(item, ClientError) and item.code in {400, 404}
         for item in _exception_chain(exc)
     ):
         return "configuration"

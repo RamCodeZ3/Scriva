@@ -87,34 +87,40 @@ least one source succeeded. A fatal error ends the stream with `status` set to
 `failed`, its cause in `error_message`, and the failing pipeline stage in
 `error_stage`; no DOCX part follows that event.
 
-## AI provider fallback
+## Gemini model fallback
 
-The document writer tries configured providers in `AI_PROVIDER_ORDER`. The
-default order is `gemini,groq`; providers without an API key are omitted.
-Groq uses its OpenAI-compatible Chat Completions endpoint, while the provider
-model and context limit remain configurable.
+Generation and expansion try Gemini models sequentially, stopping at the first
+valid document. The default priority favors capability: Gemini 3.8 Flash,
+3.6 Flash, 3.5 Flash-Lite, then 3.1 Flash-Lite. These text models have free
+input/output tiers in the [official pricing documentation](https://ai.google.dev/gemini-api/docs/pricing)
+(checked October 24, 2026). Availability and quotas depend on the project;
+a paid project can still incur charges for these models.
 
 ```env
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-3.5-flash
+GEMINI_MODELS=gemini-3.8-flash,gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite
 GEMINI_MAX_INPUT_TOKENS=1000000
-GROQ_API_KEY=
-GROQ_BASE_URL=https://api.groq.com
-GROQ_MODEL=llama-3.3-70b-versatile
-GROQ_MAX_INPUT_TOKENS=128000
-AI_PROVIDER_ORDER=gemini,groq
 AI_ATTEMPT_TIMEOUT_SECONDS=120
-AI_TOTAL_BUDGET_SECONDS=300
+AI_TOTAL_BUDGET_SECONDS=480
 AI_CIRCUIT_COOLDOWN_SECONDS=60
 ```
 
-The next provider is attempted for rate limits, provider authentication,
-timeouts, network/5xx errors, invalid JSON, invalid document structure, and
-semantic validation failures. Invalid or empty source input does not trigger
-fallback. A provider that returns 429 or 5xx is temporarily skipped by an
-in-memory circuit breaker. Circuit state is local to each application process
-and is not shared between instances. Document content and API keys are never
-written to fallback logs.
+`GEMINI_MODELS` is an ordered, comma-separated list; blank entries and duplicate
+models are removed. An empty list is rejected. `GEMINI_MODELS` is the only
+model-order configuration; the legacy `GEMINI_MODEL` variable is ignored.
+Restart the backend after changing the list to reload the cached writer.
+Groq configuration and `AI_PROVIDER_ORDER` are no longer used.
+`GEMINI_API_KEY` is required. The context limit applies to each model.
+
+The next model is attempted after rate limits, authentication errors, timeouts,
+network/5xx errors, invalid JSON, or document validation failures. Each model
+is attempted at most once per request, within the attempt timeout and total
+budget. If all fail or the budget expires, processing fails with attempt
+history; it does not retry indefinitely. Empty source input does not trigger
+fallback. A model returning 429 or 5xx is temporarily skipped by an in-memory
+circuit breaker keyed by provider and model, so other Gemini models remain
+available. Circuit state is local to each application process. Document content
+and API keys are never written to fallback logs. Attempt metadata stays private.
 
 ## Documents and process history
 

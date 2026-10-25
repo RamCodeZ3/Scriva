@@ -91,7 +91,6 @@ class CreateDocumentUseCase:
             )
 
         try:
-            metadata = document_to_output(final_document)
             exported = await self._exporter.export(final_document)
             if exported.file_bytes is None:
                 raise RuntimeError(
@@ -109,6 +108,8 @@ class CreateDocumentUseCase:
             if current_process is not None:
                 current_process.transition_to(DocumentProcessStatus.DONE)
                 await self._processes.save(current_process)
+            final_document.status = DocumentStatus.DONE
+            metadata = document_to_output(final_document)
             if on_progress is not None:
                 await on_progress(metadata)
         except Exception as exc:
