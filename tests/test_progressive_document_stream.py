@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
-from api.v1.documents import _progressive_document_response
+from api.v1.documents import _docx_response, _progressive_document_response
 from application.dtos.document_dtos import (
     CreateDocumentInput,
     DocumentFileOutput,
@@ -74,7 +74,7 @@ class ProgressiveDocumentStreamTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.document.status, DocumentStatus.DONE)
             return result
 
-        response = _progressive_document_response(operation)
+        response = _progressive_document_response(operation, creation=True)
         body = b"".join([chunk async for chunk in response.body_iterator])
 
         self.assertEqual(_json_parts(body)[-1]["status"], "done")
@@ -102,6 +102,7 @@ class ProgressiveDocumentStreamTests(unittest.IsolatedAsyncioTestCase):
         response = _progressive_document_response(
             operation,
             cleanup=cleanup,
+            creation=True,
         )
         body = b"".join([chunk async for chunk in response.body_iterator])
         json_parts = _json_parts(body)
@@ -128,7 +129,7 @@ class ProgressiveDocumentStreamTests(unittest.IsolatedAsyncioTestCase):
             await report(_metadata(DocumentStatus.EXTRACTING))
             raise RuntimeError("Writer unavailable")
 
-        response = _progressive_document_response(operation)
+        response = _progressive_document_response(operation, creation=True)
         body = b"".join([chunk async for chunk in response.body_iterator])
         json_parts = _json_parts(body)
 
@@ -139,6 +140,35 @@ class ProgressiveDocumentStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json_parts[-1]["error_message"], "Writer unavailable")
         self.assertEqual(json_parts[-1]["error_stage"], "internal")
         self.assertNotIn(b"Content-Disposition: attachment", body)
+
+    async def test_normal_responses_omit_creation_details(self) -> None:
+        result = DocumentFileOutput(
+            document=_metadata(DocumentStatus.DONE),
+            file_bytes=b"docx-content",
+            file_name="result.docx",
+            content_type="application/docx",
+        )
+        header_metadata = json.loads(
+            _docx_response(result).headers["X-Document-Metadata"]
+        )
+
+        async def operation(report):
+            await report(result.document)
+            raise RuntimeError("Writer unavailable")
+
+        response = _progressive_document_response(operation)
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        parts = _json_parts(body)
+        self.assertEqual(parts[-1]["status"], "failed")
+        for metadata in [header_metadata, *parts]:
+            for field in (
+                "error_message",
+                "error_stage",
+                "sources_errors",
+                "source_ids",
+            ):
+                self.assertNotIn(field, metadata)
+            self.assertIn("status", metadata)
 
 
 def _metadata(status: DocumentStatus) -> DocumentOutput:

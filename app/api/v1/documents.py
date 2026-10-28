@@ -70,6 +70,7 @@ from api.deps import (
 from api.schemas.documents import (
     AugmentDocumentRequest,
     CreateDocumentRequest,
+    CreateDocumentResponse,
     DeleteDocumentResponse,
     DocumentMetadataResponse,
     DocumentReferenceResponse,
@@ -158,6 +159,7 @@ async def create_document(
     return _progressive_document_response(
         lambda on_progress: use_case.execute(data, on_progress),
         cleanup=cleanup,
+        creation=True,
     )
 
 
@@ -356,6 +358,14 @@ def _metadata_out(document: DocumentOutput) -> DocumentMetadataResponse:
         document_type=document.document_type.value,
         status=document.status.value,
         user_id=str(document.user_id),
+        created_at=document.created_at.isoformat(),
+        updated_at=document.updated_at.isoformat(),
+    )
+
+
+def _creation_metadata_out(document: DocumentOutput) -> CreateDocumentResponse:
+    return CreateDocumentResponse(
+        **_metadata_out(document).model_dump(),
         error_message=document.error_message,
         error_stage=document.error_stage,
         sources_errors=[
@@ -364,8 +374,6 @@ def _metadata_out(document: DocumentOutput) -> DocumentMetadataResponse:
         ]
         or None,
         source_ids=[str(source_id) for source_id in document.source_ids],
-        created_at=document.created_at.isoformat(),
-        updated_at=document.updated_at.isoformat(),
     )
 
 
@@ -393,7 +401,9 @@ def _progressive_document_response(
         Awaitable[DocumentFileOutput],
     ],
     cleanup: Callable[[], None] | None = None,
+    creation: bool = False,
 ) -> StreamingResponse:
+    metadata_out = _creation_metadata_out if creation else _metadata_out
     boundary = "scriva-document-stream"
 
     async def stream() -> AsyncIterator[bytes]:
@@ -414,7 +424,7 @@ def _progressive_document_response(
             while True:
                 item_type, item = await queue.get()
                 if item_type == "metadata":
-                    last_metadata = _metadata_out(item)
+                    last_metadata = metadata_out(item)
                     yield _json_part(boundary, last_metadata)
                     continue
                 if item_type == "error":
@@ -422,10 +432,14 @@ def _progressive_document_response(
                         last_metadata is None
                         or last_metadata.status != "failed"
                     ):
-                        failed = DocumentMetadataResponse(
-                            status="failed",
-                            error_message=str(item),
-                            error_stage="internal",
+                        failed = (
+                            CreateDocumentResponse(
+                                status="failed",
+                                error_message=str(item),
+                                error_stage="internal",
+                            )
+                            if creation
+                            else DocumentMetadataResponse(status="failed")
                         )
                         yield _json_part(boundary, failed)
                     break

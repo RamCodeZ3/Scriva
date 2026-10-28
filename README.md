@@ -82,10 +82,17 @@ after the `done` event, by the generated DOCX part. Creation reports
 `extracting`, `generating`, `drafting`, and `done`; AI augmentation reports
 `extracting`, `expanding`, `drafting`, and `done`.
 
-Failed sources appear in `sources_errors` without stopping processing when at
+Creation uses `CreateDocumentResponse`, which includes `source_ids` and error
+details. Retrieval, manual updates, and AI augmentation use
+`DocumentMetadataResponse`, which omits `source_ids`, `error_message`,
+`error_stage`, and `sources_errors`. Retrieval and manual updates send these
+metadata in the `X-Document-Metadata` header alongside the DOCX body.
+
+During creation, failed sources appear in `sources_errors` without stopping processing when at
 least one source succeeded. A fatal error ends the stream with `status` set to
 `failed`, its cause in `error_message`, and the failing pipeline stage in
-`error_stage`; no DOCX part follows that event.
+`error_stage`. AI augmentation reports fatal errors with `status="failed"`
+without error details. No DOCX part follows a fatal error event.
 
 ## Gemini model fallback
 
