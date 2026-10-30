@@ -280,6 +280,7 @@ class AugmentDocumentUseCase:
                     )
                 source.mark_extracted(
                     extracted_result.content,
+                    bib_metadata=extracted_result.bib_metadata,
                     title=extracted_result.title,
                     author=extracted_result.author,
                     published_at=extracted_result.published_at,

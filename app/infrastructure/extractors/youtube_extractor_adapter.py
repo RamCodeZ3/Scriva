@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import re
 
+from application.ports.bib_metadata_port import MetadataEnricherPort
+from application.ports.source_extractor_port import SourceExtractorPort
+from domain.exceptions import InvalidSourceError
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import (
     NoTranscriptFound,
@@ -10,17 +12,18 @@ from youtube_transcript_api._errors import (
     VideoUnavailable,
 )
 
-from domain.exceptions import InvalidSourceError
-
-from application.ports.source_extractor_port import SourceExtractorPort
-
-_ID_RE = re.compile(
-    r"(?:youtu\.be/|youtube\.com/(?:watch\?v=|shorts/|embed/|live/))([A-Za-z0-9_-]{11})"
-)
+from infrastructure.metadata.enricher import MetadataEnricherAdapter
 
 
 class YoutubeExtractorAdapter(SourceExtractorPort):
-    def __init__(self, preferred_langs: list[str] | None = None) -> None:
+    _metadata_source_type = "youtube"
+
+    def __init__(
+        self,
+        preferred_langs: list[str] | None = None,
+        metadata_enricher: MetadataEnricherPort | None = None,
+    ) -> None:
+        super().__init__(metadata_enricher or MetadataEnricherAdapter())
         self._preferred_langs = preferred_langs or ["es", "en"]
 
     async def extract(self, raw: str) -> str:
@@ -50,9 +53,11 @@ class YoutubeExtractorAdapter(SourceExtractorPort):
         return text
 
     def _extract_video_id(self, raw: str) -> str:
-        match = _ID_RE.search(raw)
-        if not match:
+        from infrastructure.metadata.common import youtube_id
+
+        video_id = youtube_id(raw)
+        if not video_id:
             raise InvalidSourceError(
                 f"Could not parse a YouTube video id from '{raw}'."
             )
-        return match.group(1)
+        return video_id
