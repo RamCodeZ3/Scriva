@@ -25,4 +25,9 @@ dependencies = [
     "supabase>=2.31.0",
     "uvicorn>=0.52.1",
     "youtube-transcript-api>=1.2.4",
+    "yt-dlp>=2026.10.14",
+    "htmldate>=1.9.4",
+    "pypdf>=6.0.0",
+    "mutagen>=1.47.0",
+    "httpx>=0.28.1",
 ]
