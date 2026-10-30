@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import os
 
+from application.ports.bib_metadata_port import MetadataEnricherPort
 from application.ports.source_extractor_port import SourceExtractorPort
 from domain.exceptions import InvalidSourceError
+
+from infrastructure.metadata.enricher import MetadataEnricherAdapter
 
 _DOCUMENT_EXTENSIONS = {
     ".txt",
@@ -18,11 +21,15 @@ _DOCUMENT_EXTENSIONS = {
 
 
 class FileExtractorAdapter(SourceExtractorPort):
+    _metadata_source_type = "file"
+
     def __init__(
         self,
         max_chars: int | None = 200_000,
         media_extractor: SourceExtractorPort | None = None,
+        metadata_enricher: MetadataEnricherPort | None = None,
     ) -> None:
+        super().__init__(metadata_enricher or MetadataEnricherAdapter())
         self._max_chars = max_chars
         self._media_extractor = media_extractor
 

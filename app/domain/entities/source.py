@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 from domain.exceptions import InvalidSourceError
+from domain.services.source_urls import youtube_id
+from domain.value_objects.bib_metadata import BibMetadata
 
 
 class SourceType(Enum):
@@ -30,10 +32,6 @@ class FileKind(Enum):
     AUDIO = "audio"
 
 
-_YOUTUBE_RE = re.compile(
-    r"(youtube\.com/(watch\?v=|shorts/|embed/|live/)|youtu\.be/)",
-    re.IGNORECASE,
-)
 _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
 _DOCUMENT_EXTS = {
@@ -52,7 +50,7 @@ _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
 def classify_source(raw: str) -> tuple[SourceType, FileKind | None]:
     text = raw.strip()
 
-    if _YOUTUBE_RE.search(text):
+    if youtube_id(text):
         return SourceType.YOUTUBE, None
 
     path = urlparse(text).path if _URL_RE.match(text) else text
@@ -92,6 +90,8 @@ class Source:
     site_name: str | None = None
     canonical_url: str | None = None
     label: str | None = None
+    published_year: int | None = None
+    bib_metadata: BibMetadata | None = None
 
     @classmethod
     def create(
@@ -126,6 +126,7 @@ class Source:
         published_at: datetime | None = None,
         site_name: str | None = None,
         canonical_url: str | None = None,
+        bib_metadata: BibMetadata | None = None,
     ) -> None:
         if not content.strip():
             raise InvalidSourceError("Extracted content cannot be empty.")
@@ -136,6 +137,21 @@ class Source:
         self.published_at = published_at or self.published_at
         self.site_name = site_name or self.site_name
         self.canonical_url = canonical_url or self.canonical_url
+        if bib_metadata is not None:
+            if self.bib_metadata is not None:
+                # Partial retries retain earlier verified values.
+                previous = self.bib_metadata
+                for name, origin in previous.origins.items():
+                    if getattr(bib_metadata, name, None) is None:
+                        setattr(bib_metadata, name, getattr(previous, name))
+                        bib_metadata.origins[name] = origin
+                bib_metadata.needs_review |= previous.needs_review
+            self.bib_metadata = bib_metadata
+            self.published_year = bib_metadata.published_year or (
+                bib_metadata.published_at.year
+                if bib_metadata.published_at
+                else self.published_year
+            )
         self.status = SourceStatus.EXTRACTED
 
     def mark_failed(self, reason: str) -> None:
