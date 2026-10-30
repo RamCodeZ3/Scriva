@@ -165,6 +165,15 @@ Never apply the contract migration before the process-aware code is stable.
 Conversely, code that assumes the legacy columns are absent must not be
 deployed before the contract migration is ready and coordinated.
 
+## Bibliographic metadata
+
+Extractors enrich sources with verified bibliographic metadata and field-level
+provenance. YouTube metadata uses yt-dlp with oEmbed and optional Data API
+fallbacks; transcription continues to use youtube-transcript-api. Web, PDF,
+Office, local media, and text sources share the same contract. See the
+[implementation report and CLI guide](docs/bibliographic-metadata.md) for
+configuration, persistence, review flags, validation, and remaining limits.
+
 ## Status
 
 This project is under active development. issues, and feedback are welcome.
