@@ -9,7 +9,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH"
 
 # ffmpeg -> required by openai-whisper to process audio/video
-# curl/ca-certificates -> required by the Playwright installer
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         curl \
@@ -25,10 +24,6 @@ WORKDIR /app
 #    dependencies don't, Docker reuses this layer and skips reinstalling.
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project --no-dev
-
-# 2) Playwright: download Chromium plus every system library it needs
-#    to render JavaScript-heavy pages.
-RUN uv run playwright install --with-deps chromium
 
 # 3) Now copy the rest of the source code.
 COPY . .

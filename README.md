@@ -32,7 +32,8 @@ Turn raw, unstructured source material into a fully structured, properly cited d
 - **Python** — Core language integrating the APIs, orchestrating the asynchronous data flow, and running the pipeline logic.
 - **Gemini API** — Processes extracted sources and automatically drafts the structured document content (presentation, table of contents, body, etc.) under APA 7 rules.
 - **FastAPI** — Exposes the REST API endpoints for receiving document-generation requests and managing backend processing state.
-- **Playwright** — Extracts text and relevant content from web pages, including dynamic, JavaScript-rendered sites.
+- **Playwright + Lightpanda** — Extract text and metadata from web pages,
+  including JavaScript content, through a lightweight CDP browser service.
 - **Google Drive API** — Converts the generated DOCX into a native Google
   Docs document in the user's Drive.
 - **Supabase** — Stores the user database, source metadata, and processing status records.
@@ -177,3 +178,65 @@ configuration, persistence, review flags, validation, and remaining limits.
 ## Status
 
 This project is under active development. issues, and feedback are welcome.
+
+## Web extraction with Lightpanda
+
+Playwright connects to an external Lightpanda browser over CDP. Chromium
+installation is no longer required. Each extraction creates an isolated
+browser context, reuses the page HTML for bibliographic metadata, and closes
+its context and connection afterwards. Navigation waits for
+`domcontentloaded` instead of network idle; pages that load content later
+through asynchronous requests may need an explicit readiness condition.
+
+For local development, install Lightpanda using its
+[official installation guide](https://lightpanda.io/docs/run-locally/installation/one-liner)
+and start the service before running Scriva:
+
+```bash
+lightpanda serve --host 127.0.0.1 --port 9222
+```
+
+Set `LIGHTPANDA_CDP_URL` to override `ws://127.0.0.1:9222`.
+`docker compose up --build` starts both services and configures the internal
+CDP address automatically. The Lightpanda port is published only on localhost.
+The Compose image follows the official `nightly` distribution; pin a tested
+image digest for reproducible deployments. If Lightpanda is unavailable,
+the source fails through the existing extraction error handling, allowing
+other successful sources to continue.
+
+See the [Lightpanda Playwright integration](https://lightpanda.io/docs/usage/cdp/playwright).
+
+### Main content cleanup
+
+Web sources are cleaned with JavaScript executed by Playwright through
+`page.evaluate()`. The cleaner works on a cloned DOM; the complete original
+HTML remains available for bibliographic metadata. No additional HTML parser
+is used for content cleanup.
+
+Selection prioritizes `[itemprop~="articleBody"]`, `article`, then `main` or
+`[role="main"]`. Multiple candidates are ranked by paragraph content and
+link density. Without semantic containers, paragraph-rich `div` and `section`
+containers are considered before falling back to the cleaned body.
+
+The cleaner removes navigation, global headers, footers, sidebars, forms,
+buttons, scripts, styles, dialogs, explicitly hidden elements, and common
+advertising, newsletter, sharing, and related-content containers. Article
+headers remain available. Headings, paragraphs, inline text, lists, quotes,
+and table rows retain their document order; inline spans are read once and
+table cells are separated with tabs. Empty cleaned pages use the existing
+source failure handling rather than returning navigation text.
+
+These rules are heuristics: unconventional markup, external CSS visibility,
+and promotional blocks without recognizable semantics may need additional
+rules. Asynchronous content loaded after navigation readiness is still
+subject to the `domcontentloaded` limitation described above. Existing stored
+sources are not rewritten; cleanup applies to subsequent extractions.
+
+Run DOM fixture tests against an available Lightpanda service:
+
+```bash
+TEST_LIGHTPANDA_CDP_URL=ws://127.0.0.1:9222 PYTHONPATH=app \
+  uv run --frozen python -m unittest tests.test_web_content
+```
+
+Without `TEST_LIGHTPANDA_CDP_URL`, these integration tests are skipped.

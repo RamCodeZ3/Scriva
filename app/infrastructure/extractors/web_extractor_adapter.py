@@ -6,8 +6,9 @@ from application.ports.source_extractor_port import (
     SourceExtractorPort,
 )
 from domain.exceptions import InvalidSourceError
-from playwright.async_api import async_playwright
 
+from infrastructure.browser.lightpanda import lightpanda_page
+from infrastructure.extractors.web_content import EXTRACT_WEB_CONTENT
 from infrastructure.metadata.enricher import MetadataEnricherAdapter
 
 
@@ -17,7 +18,7 @@ class WebExtractorAdapter(SourceExtractorPort):
     def __init__(
         self,
         timeout_ms: int = 30_000,
-        wait_until: str = "networkidle",
+        wait_until: str = "domcontentloaded",
         metadata_enricher: MetadataEnricherPort | None = None,
     ) -> None:
         super().__init__(metadata_enricher or MetadataEnricherAdapter())
@@ -29,27 +30,19 @@ class WebExtractorAdapter(SourceExtractorPort):
 
     async def extract_with_metadata(self, raw: str) -> ExtractedSource:
         try:
-            async with async_playwright() as pw:
-                browser = await pw.chromium.launch(
-                    headless=True,
-                    args=["--disable-dev-shm-usage", "--disable-gpu"],
+            async with lightpanda_page(self._timeout_ms) as page:
+                await page.goto(
+                    raw,
+                    timeout=self._timeout_ms,
+                    wait_until=self._wait_until,
                 )
+                text = await page.evaluate(EXTRACT_WEB_CONTENT)
                 try:
-                    page = await browser.new_page()
-                    await page.goto(
-                        raw,
-                        timeout=self._timeout_ms,
-                        wait_until=self._wait_until,
-                    )
-                    text = await page.locator("body").inner_text()
-                    try:
-                        html = await page.content()
-                    except Exception:
-                        # Retain readable text if metadata HTML is unavailable.
-                        html = ""
-                    final_url = page.url
-                finally:
-                    await browser.close()
+                    html = await page.content()
+                except Exception:
+                    # Retain readable text if metadata HTML is unavailable.
+                    html = ""
+                final_url = page.url
         except Exception as exc:
             raise InvalidSourceError(
                 f"Could not extract content from URL '{raw}': {exc}"

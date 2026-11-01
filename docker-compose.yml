@@ -1,4 +1,18 @@
 services:
+  lightpanda:
+    image: lightpanda/browser:nightly
+    command:
+      - serve
+      - --host
+      - 0.0.0.0
+      - --advertise-host
+      - lightpanda
+      - --port
+      - "9222"
+    ports:
+      - "127.0.0.1:9222:9222"
+    restart: unless-stopped
+
   scriva:
     build: .
     container_name: scriva
@@ -10,11 +24,14 @@ services:
       # defaults to cpu; only switch to cuda if you have a GPU +
       # the nvidia-container-toolkit installed
       WHISPER_DEVICE: cpu
+      LIGHTPANDA_CDP_URL: ws://lightpanda:9222
+    depends_on:
+      - lightpanda
     volumes:
       # cache the Whisper model and the DiskCache store across restarts
       - whisper_cache:/root/.cache/whisper
       - disk_cache:/app/.cache
-    # Whisper/Playwright handle uploaded files via /dev/shm; Docker's
+    # Uploaded files use /dev/shm; Docker's
     # default limit (64 MB) is too small for larger audio/video uploads.
     shm_size: "1gb"
     restart: unless-stopped
