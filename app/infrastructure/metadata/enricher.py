@@ -84,21 +84,18 @@ class MetadataEnricherAdapter(MetadataEnricherPort):
             elif kind == "web":
                 if html is None:
                     # The production extractor passes its rendered HTML.
-                    from playwright.async_api import async_playwright
+                    from infrastructure.browser.lightpanda import (
+                        lightpanda_page,
+                    )
 
-                    async with async_playwright() as pw:
-                        browser = await pw.chromium.launch(headless=True)
-                        try:
-                            page = await browser.new_page()
-                            await page.goto(
-                                raw,
-                                timeout=TIMEOUT * 1000,
-                                wait_until="domcontentloaded",
-                            )
-                            html = await page.content()
-                            raw = page.url
-                        finally:
-                            await browser.close()
+                    async with lightpanda_page(TIMEOUT * 1000) as page:
+                        await page.goto(
+                            raw,
+                            timeout=TIMEOUT * 1000,
+                            wait_until="domcontentloaded",
+                        )
+                        html = await page.content()
+                        raw = page.url
                 await asyncio.to_thread(read_web, meta, html, raw)
             elif kind in {"pdf", "docx", "pptx"}:
                 reader = read_pdf if kind == "pdf" else read_office
