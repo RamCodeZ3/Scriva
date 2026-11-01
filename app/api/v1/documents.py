@@ -565,8 +565,15 @@ async def _copy_uploads(
 ) -> list[str]:
     paths: list[str] = []
     for upload in uploads:
-        suffix = Path(upload.filename or "").suffix.lower()
-        path = destination / f"{uuid4()}{suffix}"
+        # Preserve the original basename for bibliographic title fallbacks.
+        # A unique directory prevents collisions and isolates untrusted paths.
+        name = Path((upload.filename or "upload").replace("\\", "/")).name
+        name = "".join(char for char in name if char.isprintable())
+        if name in {"", ".", ".."}:
+            name = "upload"
+        folder = destination / str(uuid4())
+        await asyncio.to_thread(folder.mkdir)
+        path = folder / name
         await asyncio.to_thread(_copy_file, upload.file, path)
         await upload.close()
         paths.append(str(path))

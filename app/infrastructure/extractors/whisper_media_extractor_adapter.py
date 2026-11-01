@@ -7,19 +7,26 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
+from application.ports.bib_metadata_port import MetadataEnricherPort
 from application.ports.source_extractor_port import SourceExtractorPort
 from domain.exceptions import InvalidSourceError
+
+from infrastructure.metadata.enricher import MetadataEnricherAdapter
 
 
 class WhisperMediaExtractorAdapter(SourceExtractorPort):
     """Transcribe local audio or video files with OpenAI Whisper."""
+
+    _metadata_source_type = "auto"
 
     def __init__(
         self,
         model_name: str = "base",
         device: str | None = None,
         model_loader: Callable[..., Any] | None = None,
+        metadata_enricher: MetadataEnricherPort | None = None,
     ) -> None:
+        super().__init__(metadata_enricher or MetadataEnricherAdapter())
         self._model_name = model_name
         self._device = device
         self._model_loader = model_loader

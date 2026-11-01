@@ -94,6 +94,7 @@ from infrastructure.extractors.youtube_extractor_adapter import (
 from infrastructure.jobs.sync_job_dispatcher_adapter import (
     SyncJobDispatcherAdapter,
 )
+from infrastructure.metadata.enricher import MetadataEnricherAdapter
 from infrastructure.parsers.docx_document_parser_adapter import (
     DocxDocumentParserAdapter,
 )
@@ -139,18 +140,28 @@ def get_jwt_auth() -> SupabaseJWTAuth:
 
 @lru_cache
 def get_extractor_factory() -> ExtractorFactoryPort:
+    metadata_enricher = MetadataEnricherAdapter(
+        youtube_api_key=os.environ.get("YOUTUBE_API_KEY"),
+        crossref_email=os.environ.get("CROSSREF_CONTACT_EMAIL"),
+    )
     media_extractor = WhisperMediaExtractorAdapter(
+        metadata_enricher=metadata_enricher,
         model_name=os.environ.get("WHISPER_MODEL", "base"),
         device=os.environ.get("WHISPER_DEVICE"),
     )
     return ExtractorFactoryAdapter(
         {
-            SourceType.WEB: WebExtractorAdapter(),
-            SourceType.YOUTUBE: YoutubeExtractorAdapter(),
-            SourceType.FILE: FileExtractorAdapter(
-                media_extractor=media_extractor
+            SourceType.WEB: WebExtractorAdapter(
+                metadata_enricher=metadata_enricher
             ),
-            SourceType.TEXT: PlainTextExtractorAdapter(),
+            SourceType.YOUTUBE: YoutubeExtractorAdapter(
+                metadata_enricher=metadata_enricher
+            ),
+            SourceType.FILE: FileExtractorAdapter(
+                metadata_enricher=metadata_enricher,
+                media_extractor=media_extractor,
+            ),
+            SourceType.TEXT: PlainTextExtractorAdapter(metadata_enricher),
         }
     )
 

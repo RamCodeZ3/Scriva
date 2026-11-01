@@ -34,6 +34,7 @@ async def list_user_sources(
             raw=source.raw,
             char_count=source.char_count,
             created_at=source.created_at,
+            bibliographic=source.bibliographic,
         )
         for source in sources
     ]
@@ -56,4 +57,5 @@ async def get_user_source(
         raw=source.raw,
         char_count=source.char_count,
         created_at=source.created_at,
+        bibliographic=source.bibliographic,
     )
