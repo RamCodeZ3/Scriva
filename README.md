@@ -205,3 +205,38 @@ the source fails through the existing extraction error handling, allowing
 other successful sources to continue.
 
 See the [Lightpanda Playwright integration](https://lightpanda.io/docs/usage/cdp/playwright).
+
+### Main content cleanup
+
+Web sources are cleaned with JavaScript executed by Playwright through
+`page.evaluate()`. The cleaner works on a cloned DOM; the complete original
+HTML remains available for bibliographic metadata. No additional HTML parser
+is used for content cleanup.
+
+Selection prioritizes `[itemprop~="articleBody"]`, `article`, then `main` or
+`[role="main"]`. Multiple candidates are ranked by paragraph content and
+link density. Without semantic containers, paragraph-rich `div` and `section`
+containers are considered before falling back to the cleaned body.
+
+The cleaner removes navigation, global headers, footers, sidebars, forms,
+buttons, scripts, styles, dialogs, explicitly hidden elements, and common
+advertising, newsletter, sharing, and related-content containers. Article
+headers remain available. Headings, paragraphs, inline text, lists, quotes,
+and table rows retain their document order; inline spans are read once and
+table cells are separated with tabs. Empty cleaned pages use the existing
+source failure handling rather than returning navigation text.
+
+These rules are heuristics: unconventional markup, external CSS visibility,
+and promotional blocks without recognizable semantics may need additional
+rules. Asynchronous content loaded after navigation readiness is still
+subject to the `domcontentloaded` limitation described above. Existing stored
+sources are not rewritten; cleanup applies to subsequent extractions.
+
+Run DOM fixture tests against an available Lightpanda service:
+
+```bash
+TEST_LIGHTPANDA_CDP_URL=ws://127.0.0.1:9222 PYTHONPATH=app \
+  uv run --frozen python -m unittest tests.test_web_content
+```
+
+Without `TEST_LIGHTPANDA_CDP_URL`, these integration tests are skipped.

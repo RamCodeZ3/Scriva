@@ -15,7 +15,7 @@ class WebExtractorTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.page = MagicMock()
         self.page.goto = AsyncMock()
-        self.page.locator.return_value.inner_text = AsyncMock(
+        self.page.evaluate = AsyncMock(
             return_value="  First paragraph  \n\n Second paragraph "
         )
         self.page.content = AsyncMock(return_value="<title>Article</title>")
@@ -66,7 +66,7 @@ class WebExtractorTests(unittest.IsolatedAsyncioTestCase):
         self.enricher.enrich.assert_not_awaited()
 
     async def test_empty_text_becomes_source_error(self):
-        self.page.locator.return_value.inner_text.return_value = " \n "
+        self.page.evaluate.return_value = " \n "
         with self.assertRaises(InvalidSourceError):
             await self.extractor.extract(self.page.url)
 

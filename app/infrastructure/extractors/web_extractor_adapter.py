@@ -8,6 +8,7 @@ from application.ports.source_extractor_port import (
 from domain.exceptions import InvalidSourceError
 
 from infrastructure.browser.lightpanda import lightpanda_page
+from infrastructure.extractors.web_content import EXTRACT_WEB_CONTENT
 from infrastructure.metadata.enricher import MetadataEnricherAdapter
 
 
@@ -35,7 +36,7 @@ class WebExtractorAdapter(SourceExtractorPort):
                     timeout=self._timeout_ms,
                     wait_until=self._wait_until,
                 )
-                text = await page.locator("body").inner_text()
+                text = await page.evaluate(EXTRACT_WEB_CONTENT)
                 try:
                     html = await page.content()
                 except Exception:
