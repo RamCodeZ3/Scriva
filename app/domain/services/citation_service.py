@@ -254,7 +254,7 @@ def _reference_author(source: Source) -> str:
     author = (source.author or "").strip()
     if not author:
         return ""
-    if "," in author or _is_group_author(author):
+    if source.bib_metadata or "," in author or _is_group_author(author):
         return author
     parts = author.split()
     if len(parts) == 1:
@@ -268,6 +268,13 @@ def _citation_author(source: Source) -> str:
     author = (source.author or "").strip()
     if not author:
         return _title(source)
+    if source.bib_metadata:
+        if source.bib_metadata.origins.get("author") == "crossref":
+            names = [item.split(",", 1)[0] for item in author.split("; ")]
+            if len(names) > 2:
+                return f"{names[0]} et al."
+            return " & ".join(names)
+        return author
     if "," in author:
         return author.split(",", 1)[0]
     if _is_group_author(author):
@@ -307,12 +314,16 @@ def _title(source: Source, localized: bool = False) -> str:
 
 
 def _year(source: Source) -> int | None:
-    return source.published_at.year if source.published_at else None
+    return (
+        source.published_at.year
+        if source.published_at
+        else source.published_year
+    )
 
 
 def _display_year(source: Source, suffix: str, localized: bool) -> str:
-    if source.published_at:
-        return f"{source.published_at.year}{suffix}"
+    if _year(source):
+        return f"{_year(source)}{suffix}"
     missing = "s. f." if localized else "n.d."
     return f"{missing}-{suffix}" if suffix else missing
 
