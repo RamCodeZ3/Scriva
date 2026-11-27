@@ -6,6 +6,7 @@ from uuid import UUID
 
 from application.ports.source_repository_port import SourceRepositoryPort
 from domain.entities.source import FileKind, Source, SourceStatus, SourceType
+from domain.value_objects.bib_metadata import BibMetadata
 from supabase import Client
 
 
@@ -88,6 +89,10 @@ class SupabaseSourceRepository(SourceRepositoryPort):
                 "site_name": source.site_name,
                 "canonical_url": source.canonical_url,
                 "label": source.label,
+                "published_year": source.published_year,
+                "bibliographic": source.bib_metadata.to_dict()
+                if source.bib_metadata
+                else None,
             },
         }
 
@@ -121,4 +126,8 @@ class SupabaseSourceRepository(SourceRepositoryPort):
             site_name=metadata.get("site_name"),
             canonical_url=metadata.get("canonical_url"),
             label=metadata.get("label"),
+            published_year=metadata.get("published_year"),
+            bib_metadata=BibMetadata.from_dict(metadata["bibliographic"])
+            if metadata.get("bibliographic")
+            else None,
         )

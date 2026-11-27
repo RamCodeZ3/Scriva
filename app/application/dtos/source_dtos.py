@@ -1,8 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
 from domain.entities.source import Source, SourceType
+from domain.value_objects.bib_metadata import BibMetadata
 
 
 @dataclass(frozen=True)
@@ -12,6 +13,7 @@ class SourceOutput:
     raw: str
     char_count: int
     created_at: datetime
+    bibliographic: BibMetadata | None = field(default=None, kw_only=True)
 
     @classmethod
     def from_source(cls, source: Source) -> "SourceOutput":
@@ -23,6 +25,7 @@ class SourceOutput:
             raw=source.raw,
             char_count=source.char_count or 0,
             created_at=source.created_at,
+            bibliographic=source.bib_metadata,
         )
 
 
@@ -41,4 +44,5 @@ class SourceDetailOutput(SourceOutput):
             content=source.content or "",
             char_count=source.char_count or 0,
             created_at=source.created_at,
+            bibliographic=source.bib_metadata,
         )
